@@ -1,0 +1,12 @@
+build/
+.vs/
+out/
+opencv/
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.log
+.gemini/
