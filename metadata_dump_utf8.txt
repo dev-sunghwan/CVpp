@@ -1,0 +1,49 @@
+﻿==================================================
+[MAIN] GStreamer Video & Metadata Analytics
+==================================================
+[INFO] GStreamer core engine initialized.
+[INFO] GStreamer elements created successfully.
+[INFO] Requesting RTSP stream setup and decoding start...
+[INFO] Streaming successfully. Press ESC in the display window to exit.
+
+==================================================
+[GSTREAMER] Intercepted DESCRIBE request!
+[GSTREAMER] Injecting custom headers...
+==================================================
+
+ -> Injected: Rate-Control: no
+ -> Injected: Require: Bestshot
+
+==================================================
+[GSTREAMER] Intercepted SETUP request!
+[GSTREAMER] Injecting custom headers...
+==================================================
+
+ -> Injected: Rate-Control: no
+ -> Injected: Require: Bestshot
+
+==================================================
+[GSTREAMER] Intercepted SETUP request!
+[GSTREAMER] Injecting custom headers...
+==================================================
+
+ -> Injected: Rate-Control: no
+ -> Injected: Require: Bestshot
+
+==================================================
+[GSTREAMER] Intercepted SETUP request!
+[GSTREAMER] Injecting custom headers...
+==================================================
+
+ -> Injected: Rate-Control: no
+ -> Injected: Require: Bestshot
+
+==================================================
+[GSTREAMER] Intercepted PLAY request!
+[GSTREAMER] Injecting custom headers...
+==================================================
+
+ -> Injected: Rate-Control: no
+ -> Injected: Require: Bestshot
+[INFO] rtspsrc added a dynamic pad: video / JPEG
+[INFO] Ignoring non-H264 video pad (e.g. JPEG Bestshot).
