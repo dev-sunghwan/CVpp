@@ -1,0 +1,75 @@
+﻿#include "session_logger.h"
+
+#include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
+#include <sstream>
+#include <stdexcept>
+
+namespace {
+std::string timestamp_for_path() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time_value = std::chrono::system_clock::to_time_t(now);
+    std::tm local_time{};
+#ifdef _WIN32
+    localtime_s(&local_time, &time_value);
+#else
+    localtime_r(&time_value, &local_time);
+#endif
+    std::ostringstream stream;
+    stream << std::put_time(&local_time, "%Y%m%d-%H%M%S");
+    return stream.str();
+}
+
+std::string timestamp_for_log() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time_value = std::chrono::system_clock::to_time_t(now);
+    std::tm local_time{};
+#ifdef _WIN32
+    localtime_s(&local_time, &time_value);
+#else
+    localtime_r(&local_time, &time_value);
+#endif
+    std::ostringstream stream;
+    stream << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
+    return stream.str();
+}
+}
+
+bool SessionLogger::initialize(const std::string& output_root, std::string& error_message) {
+    try {
+        std::filesystem::path session_path = std::filesystem::path(output_root) / ("session-" + timestamp_for_path());
+        std::filesystem::create_directories(session_path);
+
+        session_dir_ = session_path.string();
+        raw_metadata_path_ = (session_path / "metadata_raw.xml.log").string();
+
+        session_log_.open((session_path / "session.log").string(), std::ios::out | std::ios::app);
+        raw_metadata_log_.open(raw_metadata_path_, std::ios::out | std::ios::app);
+    } catch (const std::exception& ex) {
+        error_message = ex.what();
+        return false;
+    }
+
+    if (!session_log_.is_open() || !raw_metadata_log_.is_open()) {
+        error_message = "Failed to open session log files.";
+        return false;
+    }
+
+    log_event("Session started");
+    return true;
+}
+
+void SessionLogger::log_event(const std::string& message) {
+    if (session_log_.is_open()) {
+        session_log_ << "[" << timestamp_for_log() << "] " << message << std::endl;
+    }
+}
+
+void SessionLogger::log_raw_metadata(const std::string& payload) {
+    if (raw_metadata_log_.is_open()) {
+        raw_metadata_log_ << "===== " << timestamp_for_log() << " =====" << std::endl;
+        raw_metadata_log_ << payload << std::endl;
+    }
+}
