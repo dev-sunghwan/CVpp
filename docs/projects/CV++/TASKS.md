@@ -1,8 +1,8 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v0.2`
-- Status: `Milestone 1 completed`
+- Version: `v0.3`
+- Status: `Milestone 2 in progress`
 - Created: `2026-03-18`
 - Last Updated: `2026-03-18`
 - Owner: `Software Engineer Agent`
@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | 2026-03-18 | v0.1 | Initial implementation plan for the CV++ v0.1 MVP. |
 | 2026-03-18 | v0.2 | Marked Milestone 1 complete and resolved initial logging-path decisions. |
+| 2026-03-18 | v0.3 | Started Milestone 2 with parser transparency logs, parsed summaries, and optional fixture capture support. |
 
 ## Summary
 This plan follows the approved PM scope and Tech Lead architecture. The order is intentional: make configuration and raw metadata observability work first, then improve parser trust, then add the minimum verification UI surface needed for fast operator checks.
@@ -33,13 +34,19 @@ Completed outcome:
 - each run creates a session-based output folder
 
 ## Milestone 2: Metadata Capture and Parse Transparency
-Goal: make raw metadata and parse results observable at the same time.
+Status: in progress.
 
-Tasks:
-- route raw metadata payloads through logging before parsing
-- surface parse success, parse failure, and unknown pattern cases explicitly
-- capture a small real-camera sample set for fixtures
-- add basic checks for representative samples: normal object, empty scene, disappearing object, variant class pattern
+Implemented so far:
+- raw metadata is logged before parsing
+- parse status is classified as success, unknown-pattern, no-objects, or malformed-payload
+- parsed summaries are written to `parsed_summary.log`
+- optional real-session fixture candidate capture is supported through `config.toml`
+- the current parse status is shown as a minimal on-screen banner
+
+Remaining work:
+- run against a real Hanwha stream and collect the first fixture set
+- verify that unknown pattern cases are surfaced as expected on real metadata
+- decide whether to keep the status banner wording as-is or adjust it after live use
 
 Done when:
 - raw and parsed outputs can be compared for the same session
@@ -91,11 +98,11 @@ Done when:
 - raw metadata log format for v0.1: single plain file per session
 
 ## Recommendation
-Move directly to Milestone 2. Milestone 1 is complete and the next practical risk is parser transparency rather than more configuration work.
+Keep Milestone 2 focused on live parser transparency and real metadata samples. Do not expand into reconnect or layout work yet.
 
 ## Open Questions
-- Should parse failures be shown only in logs first, or also reflected in a minimal on-screen status line during Milestone 2?
+- Should real fixture capture stay opt-in through config, or become enabled by default during development?
 - What is the smallest acceptable first fixture set from a real Hanwha camera session?
 
 ## Decision Request for SungHwan
-Approve the transition from Milestone 1 to Milestone 2: metadata capture and parse transparency.
+Approve continuing Milestone 2 by collecting real metadata fixtures and validating the new parse-status outputs against a live Hanwha stream.

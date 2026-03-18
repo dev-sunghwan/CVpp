@@ -1,4 +1,5 @@
 ﻿#include <iostream>
+#include <sstream>
 #include <string>
 #include <mutex>
 #include <vector>
@@ -25,13 +26,53 @@ std::mutex meta_mutex;
 bool new_frame_available = false;
 std::chrono::steady_clock::time_point last_metadata_update;
 bool has_metadata_update = false;
+std::string last_parse_status_text = "No metadata parsed yet";
 SessionLogger g_logger;
 
-static std::vector<DetectedObject> parse_onvif_xml(const std::string& xml) {
-    std::vector<DetectedObject> objects;
+static const char* parse_status_label(ParseStatus status) {
+    switch (status) {
+        case ParseStatus::Success:
+            return "success";
+        case ParseStatus::UnknownPattern:
+            return "unknown-pattern";
+        case ParseStatus::NoObjects:
+            return "no-objects";
+        case ParseStatus::MalformedPayload:
+        default:
+            return "malformed-payload";
+    }
+}
+
+static std::string summarize_objects(const std::vector<DetectedObject>& objects) {
+    if (objects.empty()) {
+        return "objects=0";
+    }
+
+    std::ostringstream summary;
+    summary << "objects=" << objects.size() << " ";
+    for (size_t i = 0; i < objects.size(); ++i) {
+        const auto& obj = objects[i];
+        if (i > 0) {
+            summary << "; ";
+        }
+        summary << "id=" << obj.id
+                << ",type=" << obj.type
+                << ",score=" << static_cast<int>(obj.likelihood * 100) << "%";
+    }
+    return summary.str();
+}
+
+static MetadataParseResult parse_onvif_xml(const std::string& xml) {
+    MetadataParseResult result;
 
     const std::string start_tag = "<tt:Object ObjectId=";
     const std::string end_tag = "</tt:Object>";
+
+    if (xml.find("<?xml") == std::string::npos) {
+        result.status = ParseStatus::MalformedPayload;
+        result.message = "XML declaration not found";
+        return result;
+    }
 
     std::regex id_re("ObjectId=\"(\\d+)\"");
     std::regex bbox_re("<tt:BoundingBox left=\"([0-9.-]+)\" top=\"([0-9.-]+)\" right=\"([0-9.-]+)\" bottom=\"([0-9.-]+)\"");
@@ -40,17 +81,24 @@ static std::vector<DetectedObject> parse_onvif_xml(const std::string& xml) {
     std::regex vehicle_re("<tt:VehicleInfo>[\\s\\S]*?<tt:Type Likelihood=\"([0-9.-]+)\">([^<]+)</tt:Type>[\\s\\S]*?</tt:VehicleInfo>");
     std::regex human_re("<tt:HumanInfo>[\\s\\S]*?<tt:Type Likelihood=\"([0-9.-]+)\">([^<]+)</tt:Type>[\\s\\S]*?</tt:HumanInfo>");
 
+    bool found_object_block = false;
+    bool found_unknown_pattern = false;
     size_t pos = 0;
     while ((pos = xml.find(start_tag, pos)) != std::string::npos) {
         size_t end = xml.find(end_tag, pos);
         if (end == std::string::npos) {
-            break;
+            result.status = ParseStatus::MalformedPayload;
+            result.message = "Object block did not close cleanly";
+            return result;
         }
+
+        found_object_block = true;
         end += end_tag.size();
         std::string block = xml.substr(pos, end - pos);
         pos = end;
 
         DetectedObject obj;
+        bool has_any_detail = false;
         std::smatch id_m;
         if (std::regex_search(block, id_m, id_re)) {
             obj.id = std::stoi(id_m[1].str());
@@ -68,28 +116,45 @@ static std::vector<DetectedObject> parse_onvif_xml(const std::string& xml) {
         if (std::regex_search(block, detail_m, vehicle_re) || std::regex_search(block, detail_m, human_re)) {
             obj.likelihood = std::stof(detail_m[1].str());
             obj.type = detail_m[2].str();
+            has_any_detail = true;
         } else {
             std::smatch class_m;
             if (std::regex_search(block, class_m, class_type_re)) {
                 obj.likelihood = std::stof(class_m[1].str());
                 obj.type = class_m[2].str();
+                has_any_detail = true;
             } else {
                 std::smatch candidate_m;
                 if (std::regex_search(block, candidate_m, candidate_re)) {
                     obj.type = candidate_m[1].str();
                     obj.likelihood = std::stof(candidate_m[2].str());
+                    has_any_detail = true;
                 }
             }
         }
 
-        objects.push_back(obj);
-        std::cout << "[META] ObjectId=" << obj.id
-                  << " Type=" << obj.type
-                  << " Likelihood=" << static_cast<int>(obj.likelihood * 100) << "%"
-                  << " Box=[" << obj.left << "," << obj.top << "," << obj.right << "," << obj.bottom << "]"
-                  << std::endl;
+        if (!has_any_detail) {
+            found_unknown_pattern = true;
+        }
+
+        result.objects.push_back(obj);
     }
-    return objects;
+
+    if (!found_object_block) {
+        result.status = ParseStatus::NoObjects;
+        result.message = "No <tt:Object> blocks found";
+        return result;
+    }
+
+    if (result.objects.empty()) {
+        result.status = ParseStatus::NoObjects;
+        result.message = "No objects parsed";
+        return result;
+    }
+
+    result.status = found_unknown_pattern ? ParseStatus::UnknownPattern : ParseStatus::Success;
+    result.message = found_unknown_pattern ? "Objects parsed but some class patterns were unknown" : "Objects parsed successfully";
+    return result;
 }
 
 static gboolean on_before_send(GstElement*, GstRTSPMessage* message, gpointer user_data) {
@@ -179,7 +244,8 @@ static void on_src_pad_added(GstElement*, GstPad* new_pad, gpointer user_data) {
     gst_caps_unref(caps);
 }
 
-static GstFlowReturn on_new_meta_sample(GstElement* sink, gpointer) {
+static GstFlowReturn on_new_meta_sample(GstElement* sink, gpointer user_data) {
+    auto* config = static_cast<AppConfig*>(user_data);
     GstSample* sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if (!sample) {
         return GST_FLOW_ERROR;
@@ -200,11 +266,35 @@ static GstFlowReturn on_new_meta_sample(GstElement* sink, gpointer) {
     if (xml_start) {
         std::string xml_str(xml_start, reinterpret_cast<const char*>(map.data + map.size));
         g_logger.log_raw_metadata(xml_str);
-        auto objects = parse_onvif_xml(xml_str);
-        std::lock_guard<std::mutex> lock(meta_mutex);
-        current_objects = std::move(objects);
-        last_metadata_update = std::chrono::steady_clock::now();
-        has_metadata_update = true;
+
+        if (config && config->capture_fixture_candidates) {
+            std::string saved_path;
+            if (g_logger.capture_fixture_candidate(config->fixture_output_dir, config->fixture_sample_limit, xml_str, saved_path)) {
+                g_logger.log_event(std::string("Saved fixture candidate: ") + saved_path);
+            }
+        }
+
+        MetadataParseResult parse_result = parse_onvif_xml(xml_str);
+        std::string summary = std::string("status=") + parse_status_label(parse_result.status) +
+                              " message=\"" + parse_result.message + "\" " +
+                              summarize_objects(parse_result.objects);
+        g_logger.log_parsed_summary(summary);
+        g_logger.log_event(std::string("Metadata parse result: ") + summary);
+        last_parse_status_text = std::string("Parse: ") + parse_status_label(parse_result.status) +
+                                 " | objects=" + std::to_string(parse_result.objects.size());
+
+        if (parse_result.status == ParseStatus::Success ||
+            parse_result.status == ParseStatus::UnknownPattern ||
+            parse_result.status == ParseStatus::NoObjects) {
+            std::lock_guard<std::mutex> lock(meta_mutex);
+            current_objects = std::move(parse_result.objects);
+            last_metadata_update = std::chrono::steady_clock::now();
+            has_metadata_update = true;
+        }
+    } else {
+        g_logger.log_event("Metadata payload received without XML start marker");
+        g_logger.log_parsed_summary("status=malformed-payload message=\"XML start marker not found\" objects=0");
+        last_parse_status_text = "Parse: malformed-payload | objects=0";
     }
 
     gst_buffer_unmap(buffer, &map);
@@ -284,6 +374,11 @@ static void draw_overlay(cv::Mat& frame, const std::vector<DetectedObject>& obje
     }
 }
 
+static void draw_status_banner(cv::Mat& frame, const std::string& status_text) {
+    cv::rectangle(frame, cv::Point(10, 10), cv::Point(frame.cols - 10, 40), cv::Scalar(20, 20, 20), cv::FILLED);
+    cv::putText(frame, status_text, cv::Point(20, 33), cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(0, 255, 255), 1);
+}
+
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
@@ -307,6 +402,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[INFO] Session output directory: " << g_logger.session_dir() << std::endl;
     g_logger.log_event("Config loaded from config.toml");
+    g_logger.log_event(std::string("Fixture candidate capture: ") + (config.capture_fixture_candidates ? "enabled" : "disabled"));
 
     gst_init(&argc, &argv);
     std::cout << "[INFO] GStreamer core engine initialized." << std::endl;
@@ -345,7 +441,7 @@ int main(int argc, char* argv[]) {
     g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_src_pad_added), pipeline);
     g_signal_connect(decodebin, "pad-added", G_CALLBACK(on_decodebin_pad_added), vconv);
     g_signal_connect(video_sink, "new-sample", G_CALLBACK(on_new_video_sample), nullptr);
-    g_signal_connect(meta_sink, "new-sample", G_CALLBACK(on_new_meta_sample), nullptr);
+    g_signal_connect(meta_sink, "new-sample", G_CALLBACK(on_new_meta_sample), &config);
 
     std::cout << "[INFO] Starting pipeline..." << std::endl;
     g_logger.log_event("Starting pipeline");
@@ -422,6 +518,7 @@ int main(int argc, char* argv[]) {
             if (!overlay_objects.empty()) {
                 draw_overlay(display_frame, overlay_objects);
             }
+            draw_status_banner(display_frame, last_parse_status_text);
             cv::imshow("GStreamer Analytics (ESC to quit)", display_frame);
         }
 

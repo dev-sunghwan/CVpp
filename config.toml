@@ -8,3 +8,8 @@ Require = "Bestshot"
 
 [logging]
 output_root = "output"
+
+[fixtures]
+capture_samples = false
+sample_limit = 5
+output_dir = "fixtures/captured"

@@ -25,6 +25,18 @@ std::string unquote(const std::string& value) {
     }
     return value;
 }
+
+bool parse_bool(const std::string& value, bool& out) {
+    if (value == "true") {
+        out = true;
+        return true;
+    }
+    if (value == "false") {
+        out = false;
+        return true;
+    }
+    return false;
+}
 }
 
 bool load_config(const std::string& path, AppConfig& config, std::string& error_message) {
@@ -77,6 +89,22 @@ bool load_config(const std::string& path, AppConfig& config, std::string& error_
         } else if (section == "logging") {
             if (key == "output_root") {
                 parsed.output_root = value;
+            }
+        } else if (section == "fixtures") {
+            if (key == "capture_samples") {
+                if (!parse_bool(value, parsed.capture_fixture_candidates)) {
+                    error_message = "Invalid boolean for fixtures.capture_samples at line " + std::to_string(line_number);
+                    return false;
+                }
+            } else if (key == "sample_limit") {
+                try {
+                    parsed.fixture_sample_limit = std::stoi(value);
+                } catch (...) {
+                    error_message = "Invalid integer for fixtures.sample_limit at line " + std::to_string(line_number);
+                    return false;
+                }
+            } else if (key == "output_dir") {
+                parsed.fixture_output_dir = value;
             }
         }
     }
