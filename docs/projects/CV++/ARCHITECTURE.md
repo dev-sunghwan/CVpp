@@ -1,8 +1,8 @@
-# CV++ Architecture
+﻿# CV++ Architecture
 
 ## Document Control
-- Version: `v0.2`
-- Status: `Ready for approval`
+- Version: `v0.3`
+- Status: `Approved`
 - Created: `2026-03-18`
 - Last Updated: `2026-03-18`
 - Owner: `Tech Lead Agent`
@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | 2026-03-18 | v0.1 | Initial lightweight architecture for the CV++ verification-focused MVP. |
 | 2026-03-18 | v0.2 | Resolved initial architecture choices for logging, reconnect behavior, and config format. |
+| 2026-03-18 | v0.3 | Marked the current architecture as approved. |
 
 ## Summary
 For v0.1, the architecture should stay as a single-process desktop application in C++ built around GStreamer for RTSP transport and OpenCV for frame rendering and overlay drawing. The goal is not a general platform yet. It is a practical verification tool for Hanwha RTSP streams, custom headers, and metadata observability.
@@ -81,4 +82,4 @@ The MVP direction is already clear enough to start, but these PM decisions would
 - What parser coverage threshold is acceptable for the first real Hanwha sample set?
 
 ## Decision Request for SungHwan
-Approve a modular single-process C++ desktop architecture for v0.1, with GStreamer transport, OpenCV rendering, file-based config, raw metadata logging, and a one-screen verification UI.
+Approved architecture: a modular single-process C++ desktop application for v0.1, with GStreamer transport, OpenCV rendering, file-based config, raw metadata logging, and a one-screen verification UI.

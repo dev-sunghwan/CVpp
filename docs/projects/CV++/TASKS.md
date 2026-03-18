@@ -1,8 +1,8 @@
-# CV++ Tasks
+﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v0.1`
-- Status: `Draft`
+- Version: `v0.2`
+- Status: `Milestone 1 completed`
 - Created: `2026-03-18`
 - Last Updated: `2026-03-18`
 - Owner: `Software Engineer Agent`
@@ -11,24 +11,26 @@
 | Date | Version | Summary |
 | --- | --- | --- |
 | 2026-03-18 | v0.1 | Initial implementation plan for the CV++ v0.1 MVP. |
+| 2026-03-18 | v0.2 | Marked Milestone 1 complete and resolved initial logging-path decisions. |
 
 ## Summary
 This plan follows the approved PM scope and Tech Lead architecture. The order is intentional: make configuration and raw metadata observability work first, then improve parser trust, then add the minimum verification UI surface needed for fast operator checks.
 
 ## Milestone 1: Minimal Runtime Skeleton
-Goal: make the app configurable and ready to log raw metadata with the smallest possible code movement.
+Status: completed.
 
-Tasks:
-- add a TOML config file for RTSP URL, headers, latency, and log path
-- extract config loading out of `main.cpp`
-- add a simple session logger that can write plain text raw metadata lines to disk
-- define a normalized in-memory metadata event shape, even if parsing is still partial
-- verify the app still builds and runs with no UI redesign
+Completed work:
+- added a TOML config file for RTSP URL, headers, latency, and output root
+- extracted config loading out of `main.cpp`
+- added a session logger that writes plain text raw metadata lines to disk
+- defined a normalized in-memory metadata object structure
+- verified the project still builds with no UI redesign
 
-Done when:
+Completed outcome:
 - stream settings are no longer hardcoded
 - the app can create a raw metadata log file
-- failures in config loading or log creation are visible in console or logs
+- config and logging failures are visible in console or logs
+- each run creates a session-based output folder
 
 ## Milestone 2: Metadata Capture and Parse Transparency
 Goal: make raw metadata and parse results observable at the same time.
@@ -84,12 +86,16 @@ Done when:
 - Do not build a polished UI before raw metadata evidence is trustworthy.
 - Keep each milestone independently runnable.
 
+## Resolved Decisions
+- default log path strategy: session-based runtime output folders under `output/session-YYYYMMDD-HHMMSS/`
+- raw metadata log format for v0.1: single plain file per session
+
 ## Recommendation
-Start with Milestone 1 immediately. It is the smallest step that reduces risk and unlocks the rest of the MVP.
+Move directly to Milestone 2. Milestone 1 is complete and the next practical risk is parser transparency rather than more configuration work.
 
 ## Open Questions
-- Should the default log path live under the project directory or a runtime-generated output folder?
-- Should raw metadata logs rotate in v0.1, or stay as single session files for simplicity?
+- Should parse failures be shown only in logs first, or also reflected in a minimal on-screen status line during Milestone 2?
+- What is the smallest acceptable first fixture set from a real Hanwha camera session?
 
 ## Decision Request for SungHwan
-Approve this implementation order, especially the very small first milestone: config externalization plus plain-file raw metadata logging.
+Approve the transition from Milestone 1 to Milestone 2: metadata capture and parse transparency.

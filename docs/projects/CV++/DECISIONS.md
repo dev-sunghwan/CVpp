@@ -1,8 +1,8 @@
-# CV++ Decisions
+﻿# CV++ Decisions
 
 ## Document Control
-- Version: `v0.2`
-- Status: `Draft for approval`
+- Version: `v0.3`
+- Status: `Approved`
 - Created: `2026-03-18`
 - Last Updated: `2026-03-18`
 - Owner: `PM Agent`
@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | 2026-03-18 | v0.1 | Initial PM decision document defining user purpose, MVP scope, out of scope, and success criteria. |
 | 2026-03-18 | v0.2 | Added PM decision for verification UI and mitigation direction for key concerns. |
+| 2026-03-18 | v0.3 | Marked the current product direction as approved. |
 
 ## Summary
 CV++ should be treated as a practical metadata-observability product first, not a general AI video platform yet. The immediate user value is letting SungHwan verify what a Hanwha RTSP stream is sending, whether custom headers work as intended, and whether parsed metadata is trustworthy enough to support later comparison with external CV models.
@@ -104,4 +105,4 @@ Mid-term response:
 Approve CV++ as an MVP focused on RTSP control and metadata observability for Hanwha environments. Defer AI comparison features until metadata capture, parsing, and verification are reliable.
 
 ## Decision Request for SungHwan
-Approve this product direction: "CV++ v0 is a Hanwha-focused C++ RTSP and metadata verification tool with a minimal verification UI, not yet an AI comparison platform."
+Approved direction: "CV++ v0 is a Hanwha-focused C++ RTSP and metadata verification tool with a minimal verification UI, not yet an AI comparison platform."

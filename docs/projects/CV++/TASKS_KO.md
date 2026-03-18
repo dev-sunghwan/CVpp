@@ -1,8 +1,8 @@
-# CV++ 작업 계획
+﻿# CV++ 작업 계획
 
 ## 문서 정보
-- 버전: `v0.1`
-- 상태: `초안`
+- 버전: `v0.2`
+- 상태: `마일스톤 1 완료`
 - 작성일: `2026-03-18`
 - 최종 수정일: `2026-03-18`
 - 작성 주체: `Software Engineer Agent`
@@ -11,24 +11,26 @@
 | 날짜 | 버전 | 변경 내용 |
 | --- | --- | --- |
 | 2026-03-18 | v0.1 | CV++ v0.1 MVP를 위한 초기 구현 계획 작성 |
+| 2026-03-18 | v0.2 | 마일스톤 1 완료 및 초기 로그 경로 결정 반영 |
 
 ## 요약
 이 계획은 승인된 PM 범위와 Tech Lead 아키텍처를 따른다. 순서는 의도적이다. 먼저 설정과 raw metadata 관측 가능성을 확보하고, 그 다음 parser 신뢰성을 높이고, 마지막으로 운영자가 빠르게 검증할 수 있는 최소 UI를 더한다.
 
 ## 마일스톤 1: 최소 런타임 뼈대
-목표: 가장 작은 코드 이동으로 앱을 설정 가능하게 만들고 raw metadata 로그 준비를 마친다.
+상태: 완료.
 
-작업:
-- RTSP URL, 헤더, latency, 로그 경로를 담는 TOML 설정 파일 추가
+완료된 작업:
+- RTSP URL, 헤더, latency, 로그 루트를 담는 TOML 설정 파일 추가
 - `main.cpp`에서 config loading 분리
-- raw metadata 한 줄 로그를 plain text 파일에 기록하는 단순 session logger 추가
-- 파싱이 아직 부분적이더라도 정규화된 in-memory metadata event 형태 정의
-- UI 재설계 없이도 기존 앱이 계속 빌드되고 실행되는지 확인
+- raw metadata를 plain text 파일에 기록하는 session logger 추가
+- 정규화된 in-memory metadata object 구조 정의
+- UI 재설계 없이 빌드 유지 확인
 
-완료 기준:
+완료 결과:
 - 스트림 설정이 더 이상 하드코딩되어 있지 않다
 - 앱이 raw metadata 로그 파일을 생성할 수 있다
-- config loading 또는 log 생성 실패가 콘솔이나 로그에 명확히 보인다
+- config loading 또는 log 생성 실패가 콘솔이나 로그에 보인다
+- 각 실행은 세션별 output 폴더를 생성한다
 
 ## 마일스톤 2: Metadata Capture 및 Parse Transparency
 목표: raw metadata와 parse 결과를 동시에 관측 가능하게 만든다.
@@ -84,12 +86,16 @@
 - raw metadata 근거가 신뢰 가능해지기 전에는 polished UI를 만들지 않는다
 - 각 마일스톤은 독립적으로 실행 가능해야 한다
 
+## 반영된 결정
+- 기본 로그 경로 전략: `output/session-YYYYMMDD-HHMMSS/` 형태의 세션별 runtime output 폴더
+- v0.1 raw metadata 로그 형식: 세션당 단일 plain file
+
 ## 권고
-즉시 마일스톤 1부터 시작하는 것이 적절하다. 이 단계가 가장 작으면서도 리스크를 줄이고, 이후 MVP 작업을 모두 열어준다.
+이제 바로 마일스톤 2로 넘어가는 것이 적절하다. 마일스톤 1은 완료됐고, 다음 실질 리스크는 설정 작업이 아니라 parser transparency다.
 
 ## 열린 질문
-- 기본 로그 경로는 프로젝트 디렉터리 아래가 좋은지, 런타임 생성 output 폴더가 좋은지?
-- v0.1에서는 raw metadata 로그를 회전시킬지, 단순 세션 파일로 둘지?
+- 마일스톤 2에서 parse failure를 우선 로그에만 남길지, 최소 화면 상태 표시에도 반영할지?
+- 실제 Hanwha 카메라 세션에서 어떤 구성을 첫 fixture 세트의 최소 기준으로 볼지?
 
 ## SungHwan 승인 요청
-이 구현 순서를 승인해 달라. 특히 첫 마일스톤인 config externalization과 plain-file raw metadata logging부터 시작하는 방향을 승인해 달라.
+마일스톤 1에서 마일스톤 2로의 전환을 승인해 달라: metadata capture 및 parse transparency.
