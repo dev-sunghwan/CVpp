@@ -1,4 +1,4 @@
-﻿# CV++ Tasks
+# CV++ Tasks
 
 ## Document Control
 - Version: `v0.3`
@@ -100,6 +100,17 @@ Done when:
 ## Recommendation
 Keep Milestone 2 focused on live parser transparency and real metadata samples. Do not expand into reconnect or layout work yet.
 
+## Parallel Investigation
+High-resolution profile support should be investigated in parallel while `profile10` remains the working baseline.
+
+Investigation tasks:
+- verify camera-side settings for `profile2` and `profile4`
+- test each profile with no competing clients connected
+- compare RTSP negotiation behavior per profile
+- confirm whether missing video is a camera/profile issue or an app-side assumption
+
+Reference:
+- `docs/projects/CV++/HIGH_RESOLUTION_PROFILE_INVESTIGATION.md`
 ## Open Questions
 - Should real fixture capture stay opt-in through config, or become enabled by default during development?
 - What is the smallest acceptable first fixture set from a real Hanwha camera session?
