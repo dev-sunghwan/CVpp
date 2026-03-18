@@ -1,10 +1,11 @@
-﻿#include <iostream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <mutex>
 #include <vector>
 #include <regex>
 #include <chrono>
+#include <map>
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp/rtsp.h>
@@ -28,6 +29,21 @@ std::chrono::steady_clock::time_point last_metadata_update;
 bool has_metadata_update = false;
 std::string last_parse_status_text = "No metadata parsed yet";
 SessionLogger g_logger;
+int g_video_sample_count = 0;
+bool g_missing_video_warned = false;
+
+static std::string caps_to_string(GstCaps* caps) {
+    if (!caps) {
+        return "<no-caps>";
+    }
+
+    gchar* text = gst_caps_to_string(caps);
+    std::string result = text ? text : "<caps-to-string-failed>";
+    if (text) {
+        g_free(text);
+    }
+    return result;
+}
 
 static const char* parse_status_label(ParseStatus status) {
     switch (status) {
@@ -189,14 +205,24 @@ static void on_decodebin_pad_added(GstElement*, GstPad* new_pad, gpointer user_d
     if (!caps) {
         caps = gst_pad_query_caps(new_pad, NULL);
     }
+
+    const std::string caps_text = caps_to_string(caps);
     GstStructure* str = gst_caps_get_structure(caps, 0);
     const gchar* name = gst_structure_get_name(str);
 
+    std::cout << "[INFO] decodebin pad-added: " << GST_PAD_NAME(new_pad)
+              << " | caps=" << caps_text << std::endl;
+
     if (g_str_has_prefix(name, "video/x-raw")) {
-        if (gst_pad_link(new_pad, sink_pad) == GST_PAD_LINK_OK) {
+        const GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
+        if (link_result == GST_PAD_LINK_OK) {
             std::cout << "[INFO] decodebin successfully linked to videoconvert." << std::endl;
+        } else {
+            std::cout << "[WARN] Failed to link decodebin pad to videoconvert: "
+                      << gst_pad_link_get_name(link_result) << std::endl;
         }
     }
+
     gst_caps_unref(caps);
     gst_object_unref(sink_pad);
 }
@@ -208,32 +234,44 @@ static void on_src_pad_added(GstElement*, GstPad* new_pad, gpointer user_data) {
         caps = gst_pad_query_caps(new_pad, NULL);
     }
 
+    const std::string caps_text = caps_to_string(caps);
     GstStructure* structure = gst_caps_get_structure(caps, 0);
     const gchar* media = gst_structure_get_string(structure, "media");
     std::string media_str = media ? media : "unknown";
     const gchar* encoding_name = gst_structure_get_string(structure, "encoding-name");
     std::string encoding_str = encoding_name ? encoding_name : "unknown";
 
-    std::cout << "[INFO] rtspsrc added a dynamic pad: " << media_str << " / " << encoding_str << std::endl;
+    std::cout << "[INFO] rtspsrc added a dynamic pad: " << media_str << " / " << encoding_str
+              << " | pad=" << GST_PAD_NAME(new_pad)
+              << " | caps=" << caps_text << std::endl;
 
-    if (media_str == "video" && encoding_str == "H264") {
-        GstElement* decodebin = gst_bin_get_by_name(GST_BIN(pipeline), "decodebin");
-        GstPad* sink_pad = gst_element_get_static_pad(decodebin, "sink");
+    if (media_str == "video" &&
+        (encoding_str == "H264" || encoding_str == "JPEG" || encoding_str == "MJPEG")) {
+        GstElement* video_queue = gst_bin_get_by_name(GST_BIN(pipeline), "video_queue");
+        GstPad* sink_pad = gst_element_get_static_pad(video_queue, "sink");
         if (!gst_pad_is_linked(sink_pad)) {
-            if (gst_pad_link(new_pad, sink_pad) == GST_PAD_LINK_OK) {
-                std::cout << "[INFO] Linked H264 video pad to decodebin." << std::endl;
+            const GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
+            if (link_result == GST_PAD_LINK_OK) {
+                std::cout << "[INFO] Linked video pad to video_queue: " << encoding_str << std::endl;
+            } else {
+                std::cout << "[WARN] Failed to link video pad to video_queue: "
+                          << gst_pad_link_get_name(link_result) << std::endl;
             }
         } else {
-            std::cout << "[INFO] decodebin sink already linked, ignoring extra pad." << std::endl;
+            std::cout << "[INFO] video_queue sink already linked, ignoring extra video pad." << std::endl;
         }
         gst_object_unref(sink_pad);
-        gst_object_unref(decodebin);
+        gst_object_unref(video_queue);
     } else if (media_str == "application" &&
                (encoding_str == "vnd.onvif.metadata" || encoding_str == "VND.ONVIF.METADATA")) {
         GstElement* meta_sink = gst_bin_get_by_name(GST_BIN(pipeline), "meta_sink");
         GstPad* sink_pad = gst_element_get_static_pad(meta_sink, "sink");
-        if (gst_pad_link(new_pad, sink_pad) == GST_PAD_LINK_OK) {
+        const GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
+        if (link_result == GST_PAD_LINK_OK) {
             std::cout << "[INFO] Linked ONVIF metadata pad to meta_sink." << std::endl;
+        } else {
+            std::cout << "[WARN] Failed to link ONVIF metadata pad: "
+                      << gst_pad_link_get_name(link_result) << std::endl;
         }
         gst_object_unref(sink_pad);
         gst_object_unref(meta_sink);
@@ -319,12 +357,19 @@ static GstFlowReturn on_new_video_sample(GstElement* sink, gpointer) {
 
     GstMapInfo map;
     gst_buffer_map(buffer, &map, GST_MAP_READ);
-    cv::Mat frame(height, width, CV_8UC3, (char*)map.data, cv::Mat::AUTO_STEP);
+    cv::Mat frame(height, width, CV_8UC3, reinterpret_cast<char*>(map.data), cv::Mat::AUTO_STEP);
 
     {
         std::lock_guard<std::mutex> lock(frame_mutex);
         frame.copyTo(current_frame);
         new_frame_available = true;
+    }
+
+    ++g_video_sample_count;
+    if (g_video_sample_count == 1) {
+        std::cout << "[INFO] First video sample received: " << width << "x" << height << std::endl;
+        g_logger.log_event(std::string("First video sample received: ") + std::to_string(width) + "x" + std::to_string(height));
+        g_missing_video_warned = true;
     }
 
     gst_buffer_unmap(buffer, &map);
@@ -409,18 +454,23 @@ int main(int argc, char* argv[]) {
 
     GstElement* pipeline = gst_pipeline_new("analytics_pipeline");
     GstElement* rtspsrc = gst_element_factory_make("rtspsrc", "mysrc");
+    GstElement* video_queue = gst_element_factory_make("queue", "video_queue");
     GstElement* decodebin = gst_element_factory_make("decodebin", "decodebin");
     GstElement* vconv = gst_element_factory_make("videoconvert", "vconv");
     GstElement* video_sink = gst_element_factory_make("appsink", "video_sink");
     GstElement* meta_sink = gst_element_factory_make("appsink", "meta_sink");
 
-    if (!pipeline || !rtspsrc || !decodebin || !vconv || !video_sink || !meta_sink) {
+    if (!pipeline || !rtspsrc || !video_queue || !decodebin || !vconv || !video_sink || !meta_sink) {
         std::cerr << "[ERROR] Failed to create GStreamer elements." << std::endl;
         g_logger.log_event("Failed to create GStreamer elements");
         return 1;
     }
 
-    g_object_set(G_OBJECT(rtspsrc), "location", config.rtsp_url.c_str(), "latency", config.latency, NULL);
+    g_object_set(G_OBJECT(rtspsrc),
+                 "location", config.rtsp_url.c_str(),
+                 "latency", config.latency,
+                 "protocols", GST_RTSP_LOWER_TRANS_TCP,
+                 NULL);
     g_signal_connect(rtspsrc, "before-send", G_CALLBACK(on_before_send), &config.headers);
 
     GstCaps* caps_v = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "BGR", NULL);
@@ -429,8 +479,15 @@ int main(int argc, char* argv[]) {
     gst_caps_unref(caps_v);
 
     g_object_set(G_OBJECT(meta_sink), "emit-signals", TRUE, "sync", FALSE, NULL);
+    g_object_set(G_OBJECT(video_queue), "leaky", 2, "max-size-buffers", 8, NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), rtspsrc, decodebin, vconv, video_sink, meta_sink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), rtspsrc, video_queue, decodebin, vconv, video_sink, meta_sink, NULL);
+
+    if (!gst_element_link(video_queue, decodebin)) {
+        std::cerr << "[ERROR] Failed to link video_queue to decodebin." << std::endl;
+        g_logger.log_event("Failed to link video_queue to decodebin");
+        return 1;
+    }
 
     if (!gst_element_link(vconv, video_sink)) {
         std::cerr << "[ERROR] Failed to link vconv to video_sink." << std::endl;
@@ -454,9 +511,11 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "[INFO] Streaming. Press ESC to exit." << std::endl;
 
+    const auto stream_started_at = std::chrono::steady_clock::now();
+
     while (true) {
         GstBus* bus = gst_element_get_bus(pipeline);
-        GstMessage* msg = gst_bus_pop(bus);
+        GstMessage* msg = gst_bus_timed_pop(bus, 10 * GST_MSECOND);
         if (msg) {
             GError* err = nullptr;
             gchar* dbg = nullptr;
@@ -467,6 +526,7 @@ int main(int argc, char* argv[]) {
                     g_logger.log_event(std::string("GStreamer error: ") + (err ? err->message : "?"));
                     if (dbg) {
                         std::cerr << "[GST DEBUG] " << dbg << std::endl;
+                        g_logger.log_event(std::string("GStreamer debug: ") + dbg);
                     }
                     if (err) {
                         g_error_free(err);
@@ -479,11 +539,38 @@ int main(int argc, char* argv[]) {
                     gst_message_parse_warning(msg, &err, &dbg);
                     std::cerr << "[GST WARN]  " << (err ? err->message : "?") << std::endl;
                     g_logger.log_event(std::string("GStreamer warning: ") + (err ? err->message : "?"));
+                    if (dbg) {
+                        g_logger.log_event(std::string("GStreamer warning debug: ") + dbg);
+                    }
                     if (err) {
                         g_error_free(err);
                     }
                     if (dbg) {
                         g_free(dbg);
+                    }
+                    break;
+                case GST_MESSAGE_EOS:
+                    std::cout << "[GST INFO] End of stream received." << std::endl;
+                    g_logger.log_event("GStreamer EOS received");
+                    break;
+                case GST_MESSAGE_STATE_CHANGED:
+                    if (GST_MESSAGE_SRC(msg) == GST_OBJECT(pipeline)) {
+                        GstState old_state;
+                        GstState new_state;
+                        GstState pending_state;
+                        gst_message_parse_state_changed(msg, &old_state, &new_state, &pending_state);
+                        std::ostringstream state_text;
+                        state_text << "Pipeline state changed: "
+                                   << gst_element_state_get_name(old_state) << " -> "
+                                   << gst_element_state_get_name(new_state);
+                        g_logger.log_event(state_text.str());
+                    }
+                    break;
+                case GST_MESSAGE_BUFFERING:
+                    if (GST_MESSAGE_SRC(msg) == GST_OBJECT(pipeline)) {
+                        gint percent = 0;
+                        gst_message_parse_buffering(msg, &percent);
+                        g_logger.log_event(std::string("Pipeline buffering: ") + std::to_string(percent) + "%");
                     }
                     break;
                 default:
@@ -492,6 +579,14 @@ int main(int argc, char* argv[]) {
             gst_message_unref(msg);
         }
         gst_object_unref(bus);
+
+        const auto now = std::chrono::steady_clock::now();
+        if (!g_missing_video_warned && g_video_sample_count == 0 &&
+            std::chrono::duration_cast<std::chrono::seconds>(now - stream_started_at).count() >= 10) {
+            std::cout << "[WARN] No video samples received within 10 seconds." << std::endl;
+            g_logger.log_event("No video samples received within 10 seconds");
+            g_missing_video_warned = true;
+        }
 
         cv::Mat display_frame;
         {
@@ -506,10 +601,10 @@ int main(int argc, char* argv[]) {
             std::vector<DetectedObject> overlay_objects;
             {
                 std::lock_guard<std::mutex> lock(meta_mutex);
-                const auto now = std::chrono::steady_clock::now();
+                const auto fresh_now = std::chrono::steady_clock::now();
                 const bool metadata_is_fresh =
                     has_metadata_update &&
-                    (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_metadata_update).count() <= 500);
+                    (std::chrono::duration_cast<std::chrono::milliseconds>(fresh_now - last_metadata_update).count() <= 500);
 
                 if (metadata_is_fresh) {
                     overlay_objects = current_objects;
@@ -536,3 +631,4 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO] Done." << std::endl;
     return 0;
 }
+

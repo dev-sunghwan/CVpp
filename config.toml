@@ -1,10 +1,10 @@
-﻿[rtsp]
-url = "rtsp://admin:password@192.168.0.10/profile10/media.smp"
+[rtsp]
+url = "rtsp://admin:Sunap1!!@192.168.4.225/profile4/media.smp"
 latency = 100
 
 [headers]
-Rate-Control = "no"
-Require = "Bestshot"
+Rate-Control = ""
+Require = ""
 
 [logging]
 output_root = "output"

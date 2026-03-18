@@ -1,4 +1,4 @@
-﻿#include "app_config.h"
+#include "app_config.h"
 
 #include <cctype>
 #include <fstream>
@@ -7,6 +7,14 @@
 namespace {
 std::string trim(const std::string& value) {
     size_t start = 0;
+
+    if (value.size() >= 3 &&
+        static_cast<unsigned char>(value[0]) == 0xEF &&
+        static_cast<unsigned char>(value[1]) == 0xBB &&
+        static_cast<unsigned char>(value[2]) == 0xBF) {
+        start = 3;
+    }
+
     while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
         ++start;
     }

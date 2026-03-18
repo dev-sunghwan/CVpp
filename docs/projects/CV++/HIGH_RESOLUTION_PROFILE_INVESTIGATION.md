@@ -1,91 +1,83 @@
 # High-Resolution Profile Investigation
 
 ## Document Control
-- Version: `v0.1`
-- Status: `Open investigation`
+- Version: `v0.3`
+- Status: `Resolved for profile4`
 - Created: `2026-03-18`
 - Last Updated: `2026-03-18`
 - Owner: `Tech Lead Agent`
 
 ## Summary
-The current application can stream and overlay metadata successfully with `profile10`, but higher-resolution profiles are not yet reliable. This is now a distinct technical investigation track because long-term verification quality will be limited if only the low-resolution profile is usable.
+The high-resolution playback issue was reproducible in the app and is now considered resolved for `profile4`. The camera was not the primary problem. External validation with VLC and `gst-launch-1.0` proved that `profile4` exposes both high-resolution H.264 video and ONVIF metadata. The main issue was the application's video pipeline shape.
 
-## What We Know
-Confirmed working baseline:
-- `profile10` opens successfully
-- video pad is exposed and decoded
-- metadata pad is exposed
-- video window appears and overlay draws
+## Final Findings
+Known-good external evidence:
+- VLC plays `rtsp://admin:Sunap1!!@192.168.4.225/profile4/media.smp` successfully.
+- `gst-launch-1.0` shows both:
+  - `media=video`, `encoding-name=H264`, `a-framesize=1920-1080`
+  - `media=application`, `encoding-name=VND.ONVIF.METADATA`
 
-Observed failures:
-- `profile2` did not progress beyond `READY -> PAUSED`
-- `profile2` exposed no usable video frames in the app
-- direct `gst-launch` probing also failed to show quick success for `profile2`
-- `profile4` exposed metadata but no video pad
+Known-good app evidence after the fix:
+- `rtspsrc` exposes both metadata and H.264 video pads.
+- the app links the video pad successfully.
+- `decodebin` produces `video/x-raw` at `1920x1080`.
+- the app receives the first video sample successfully.
 
-Important implementation changes already tested:
-- `Bestshot` header disabled
-- `Rate-Control` header disabled
-- RTSP over TCP forced
-- JPEG/MJPEG video pads accepted in addition to H264
+Representative app log after the fix:
+- `Linked video pad to video_queue: H264`
+- `decodebin pad-added: src_0 | caps=video/x-raw ... width=(int)1920, height=(int)1080`
+- `First video sample received: 1920x1080`
 
-## Current Hypotheses
-Most likely causes, in priority order:
-1. The camera profile itself is configured differently and may not actually expose a usable video track for the requested stream.
-2. The camera may allow only limited concurrent consumers for some profiles.
-3. Some profiles may require different transport or encoder settings than the current app assumes.
-4. The issue may be in camera-side profile definition rather than in the app pipeline.
+## Root Cause
+The root cause was app-side pipeline robustness, not camera-side profile validity.
 
-Less likely causes:
-- basic GStreamer wiring, because `profile10` already proves the main app path works
-- metadata path design, because `profile4` still delivered metadata separately
+More specifically:
+1. The working external probe used a `rtspsrc -> queue -> decodebin` pattern.
+2. The app originally linked the RTSP video pad directly into `decodebin`.
+3. For `profile4`, that direct path was not reliable enough, even though the stream itself was valid.
+4. After introducing `video_queue` and improving dynamic pad handling diagnostics, `profile4` video playback worked correctly in the app.
 
-## Recommended Debugging Sequence
-1. Verify the camera-side profile definitions for `profile2` and `profile4`.
-   - Confirm codec, resolution, transport expectations, and whether video is enabled.
-2. Test each profile with only one consumer connected.
-   - Eliminate multi-client contention as a variable.
-3. Probe profiles outside the app with minimal tools.
-   - `gst-launch-1.0` against each profile
-   - if available later, compare with `ffprobe` or vendor tools
-4. Capture and compare RTSP negotiation results across profiles.
-   - DESCRIBE/SETUP/PLAY behavior
-   - whether dynamic video pads are ever emitted
-5. Only after the above, reconsider app-side pipeline changes.
-   - Do not overfit the app to a camera profile that may be misconfigured
+## Implemented Fixes
+Code and configuration changes that materially contributed to the fix:
+- add `video_queue` between `rtspsrc` and `decodebin`
+- force RTSP transport over TCP
+- keep `Bestshot` disabled
+- keep `Rate-Control` disabled for this verification path
+- log full caps and pad names for dynamic RTSP and decodebin pads
+- log first received video sample resolution
+- harden config parsing against UTF-8 BOM input
 
-## Practical Next Actions
-Short-term actions for SungHwan:
-- keep feature work moving with `profile10`
-- inspect profile settings in the camera UI for `profile2` and `profile4`
-- note codec, resolution, smart codec options, and any bestshot/event-related settings
-- retry with no other clients connected
+## Why Earlier Hypotheses Were Incomplete
+Earlier hypotheses over-weighted camera-side causes because:
+- `profile10` worked and `profile4` did not
+- the app sometimes exposed only metadata for `profile4`
+- `profile2` also behaved differently
 
-Short-term actions for engineering:
-- keep `profile10` as the active development baseline
-- separate object metadata handling from event metadata handling
-- preserve the current diagnostics so profile investigation can continue later
+What changed the direction was a strong counterexample:
+- VLC playing `profile4` correctly
+- GStreamer CLI also seeing the video track correctly
 
-## Why This Matters
-If high-resolution profiles cannot be opened reliably, later evaluation work becomes harder:
-- overlay trust is weaker on small frames
-- metadata-to-image comparison is less useful
-- future external CV comparison becomes less representative
+That evidence falsified the idea that `profile4` was simply metadata-only or misconfigured.
 
-This is a real risk, but it is not a blocker for all v0.1 progress. The right approach is to keep a working baseline while running a bounded investigation.
+## Remaining Technical Notes
+This does not mean all profile-related risk is gone.
+
+Still open:
+- `profile2` behavior remains unexplained
+- overlay quality for fast-moving vehicles still needs investigation
+- object metadata handling should still be separated more clearly from event/status metadata
+
+But the original high-resolution playback blocker for `profile4` is no longer open.
 
 ## Learning Notes for SungHwan
-The value of this investigation is not only fixing the stream. The useful engineering lesson is learning how to separate:
-- app bug vs camera/profile behavior
-- product blocker vs parallel technical risk
-- evidence, hypothesis, and next experiment
+This issue is a good example of practical debugging discipline.
 
-At this stage, "following along" is expected. The important skill is not memorizing every GStreamer detail immediately. It is learning how to narrow a problem with logs, controlled configuration changes, and explicit hypotheses.
+Key lessons:
+- Treat VLC and `gst-launch` as control experiments, not just convenience tools.
+- A valid counterexample should change the leading hypothesis quickly.
+- "Camera problem" and "app pipeline problem" are different classes of failure and should be tested separately.
+- When a minimal external pipeline works, the next question is not "why is the stream broken?" but "what is different in our app path?"
+- Reproducing a known-good topology inside the app can be a faster path than speculative tuning.
 
 ## Recommendation
-Continue development on `profile10`, but treat high-resolution profile support as an explicit architecture risk under investigation rather than an informal background issue.
-
-## Decision Request for SungHwan
-Approve this split strategy:
-- development baseline remains `profile10`
-- high-resolution profile support is investigated in parallel with explicit camera-side and RTSP-side checks
+Treat this issue as resolved for `profile4`, keep `profile4` available as the high-resolution verification baseline, and move subsequent work to overlay quality and metadata interpretation rather than RTSP stream acquisition.
