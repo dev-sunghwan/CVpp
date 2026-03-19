@@ -1,7 +1,7 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v0.4`
+- Version: `v0.5`
 - Status: `Milestone 2 in progress`
 - Created: `2026-03-18`
 - Last Updated: `2026-03-19`
@@ -13,7 +13,8 @@
 | 2026-03-18 | v0.1 | Initial implementation plan for the CV++ v0.1 MVP. |
 | 2026-03-18 | v0.2 | Marked Milestone 1 complete and resolved initial logging-path decisions. |
 | 2026-03-18 | v0.3 | Started Milestone 2 with parser transparency logs, parsed summaries, and optional fixture capture support. |
-| 2026-03-19 | v0.4 | Closed the parallel high-resolution stream investigation for `profile2` and `profile4`. |
+| 2026-03-19 | v0.4 | Closed the initial high-resolution stream investigation for `profile2` and `profile4`. |
+| 2026-03-19 | v0.5 | Reopened `profile2` work after confirming intermittent mixed-pipeline startup failures and stronger video-only behavior. |
 
 ## Summary
 This plan follows the approved PM scope and Tech Lead architecture. The order is intentional: make configuration and raw metadata observability work first, then improve parser trust, then add the minimum verification UI surface needed for fast operator checks.
@@ -43,20 +44,28 @@ Implemented so far:
 - parsed summaries are written to `parsed_summary.log`
 - optional real-session fixture candidate capture is supported through `config.toml`
 - the current parse status is shown as a minimal on-screen banner
-- high-resolution playback is verified for both `profile2` and `profile4`
 - normal shutdown now logs RTSP methods and confirms `PAUSE` plus `TEARDOWN`
+- a startup watchdog can reset and retry failed stream starts
+- a true video-only mode is now available by omitting the metadata appsink from the pipeline
+
+Current runtime reality:
+- `profile4` is the reliable mixed-mode high-resolution baseline
+- `profile2` is still intermittent in mixed mode
+- `profile2` is materially more stable in video-only mode
 
 Remaining work:
 - collect the first representative fixture set from a real Hanwha session
 - verify that unknown pattern cases are surfaced as expected on real metadata
 - separate object overlay logic from non-object event metadata
 - improve overlay behavior for fast-moving vehicles
+- decide the right architecture for `profile2` metadata handling before treating it as a full mixed-mode baseline
 
 Done when:
 - raw and parsed outputs can be compared for the same session
 - parser failures no longer fail silently
 - sample fixtures exist from real Hanwha metadata
 - object overlay behavior is trustworthy enough for live verification
+- the project has a clear mixed-mode baseline strategy for high-resolution streams
 
 ## Milestone 3: Overlay State Isolation
 Goal: make freshness and stale-object behavior easier to trust and maintain.
@@ -101,13 +110,13 @@ Done when:
 ## Resolved Decisions
 - default log path strategy: session-based runtime output folders under `output/session-YYYYMMDD-HHMMSS/`
 - raw metadata log format for v0.1: single plain file per session
-- high-resolution verification baseline: both `profile2` and `profile4` are valid in-app targets
+- `profile4` remains the current mixed-mode high-resolution baseline
 
 ## Recommendation
 Keep Milestone 2 focused on live parser transparency, real metadata samples, and better object-overlay trust. Do not expand into reconnect or layout work yet.
 
 ## Parallel Investigation
-The original high-resolution stream investigation is now closed.
+The original high-resolution investigation is no longer considered fully closed.
 
 Reference:
 - `docs/projects/CV++/HIGH_RESOLUTION_PROFILE_INVESTIGATION.md`
@@ -116,6 +125,7 @@ Reference:
 - Should real fixture capture stay opt-in through config, or become enabled by default during development?
 - What is the smallest acceptable first fixture set from a real Hanwha camera session?
 - What is the right freshness or hold behavior for fast-moving vehicles?
+- Should `profile2` metadata be handled in a separate pipeline from video?
 
 ## Decision Request for SungHwan
-Approve continuing Milestone 2 by collecting real metadata fixtures, removing non-object overlay noise, and improving fast-object overlay behavior on the live Hanwha stream.
+Approve continuing Milestone 2 with `profile4` as the mixed-mode baseline while Tech Lead reviews whether `profile2` should use a split video-and-metadata strategy.

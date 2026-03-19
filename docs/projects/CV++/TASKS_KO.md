@@ -1,7 +1,7 @@
 ﻿# CV++ 작업 계획
 
 ## 문서 정보
-- 버전: `v0.4`
+- 버전: `v0.5`
 - 상태: `마일스톤 2 진행 중`
 - 작성일: `2026-03-18`
 - 최종 수정일: `2026-03-19`
@@ -13,7 +13,8 @@
 | 2026-03-18 | v0.1 | CV++ v0.1 MVP 구현 계획 초안 작성 |
 | 2026-03-18 | v0.2 | 마일스톤 1 완료 및 초기 로그 경로 결정 반영 |
 | 2026-03-18 | v0.3 | parser transparency, parsed summary, fixture candidate capture를 포함한 마일스톤 2 착수 |
-| 2026-03-19 | v0.4 | `profile2`, `profile4` 고해상도 스트림 검증 완료 반영 |
+| 2026-03-19 | v0.4 | `profile2`, `profile4` 고해상도 스트림 1차 검증 결과 반영 |
+| 2026-03-19 | v0.5 | `profile2` mixed pipeline 불안정과 video-only 기준선 확보를 반영하여 조사 재개 |
 
 ## 요약
 이 계획은 승인된 PM 범위와 Tech Lead 아키텍처를 따른다. 순서는 의도적이다. 먼저 설정과 raw metadata 관측성을 확보하고, 그 다음 parser 신뢰성을 높이며, 마지막으로 최소 검증 UI를 정리한다.
@@ -43,20 +44,28 @@
 - `parsed_summary.log`에 parsed summary 기록
 - `config.toml`로 실제 세션 fixture candidate 저장 가능
 - 현재 parse status를 화면 배너로 표시
-- `profile2`, `profile4` 모두에서 고해상도 재생 검증 완료
 - 정상 종료 시 RTSP method를 기록하고 `PAUSE`, `TEARDOWN` 확인 가능
+- startup watchdog이 실패한 스트림 시작을 reset 후 재시도 가능
+- metadata appsink를 파이프라인에서 제외하는 true video-only 모드 지원
+
+현재 런타임 기준선:
+- `profile4`는 안정적인 mixed-mode 고해상도 기준선
+- `profile2`는 mixed mode에서 아직 간헐적
+- `profile2`는 video-only mode에서 훨씬 안정적
 
 남은 작업:
 - 실제 Hanwha 세션에서 대표 fixture 세트 수집
 - 실제 metadata에서 unknown pattern 노출 확인
 - object overlay 로직에서 non-object event metadata 분리
 - 빠르게 움직이는 차량에 대한 overlay 품질 개선
+- `profile2`를 full mixed-mode 기준선으로 보기 전에 metadata 처리 구조 결정
 
 완료 기준:
 - 같은 세션 기준으로 raw와 parsed 결과 비교 가능
 - parser failure가 더 이상 조용히 묻히지 않음
 - 실제 Hanwha metadata fixture 확보
 - live 검증에 쓸 수 있을 만큼 object overlay 신뢰성 확보
+- 고해상도 mixed-mode 기준선 전략이 명확해짐
 
 ## 마일스톤 3: Overlay State 분리
 목표: freshness와 stale-object 동작을 더 신뢰 가능하고 유지보수 가능하게 만든다.
@@ -101,13 +110,13 @@
 ## 반영된 결정
 - 기본 로그 경로: `output/session-YYYYMMDD-HHMMSS/` 형태의 세션별 output 폴더
 - v0.1 raw metadata 로그 형식: 세션당 단일 plain file
-- 고해상도 검증 기준선: `profile2`, `profile4` 모두 앱 내에서 유효
+- `profile4`를 현재 mixed-mode 고해상도 기준선으로 유지
 
 ## 권고
 마일스톤 2는 live parser transparency, 실제 metadata 샘플, object overlay 신뢰성 개선에 집중한다. 아직 reconnect나 화면 레이아웃 확장으로 범위를 넓히지 않는다.
 
 ## 병행 조사
-초기 고해상도 스트림 조사는 종료되었다.
+고해상도 조사는 아직 완전히 닫히지 않았다.
 
 참고 문서:
 - `docs/projects/CV++/HIGH_RESOLUTION_PROFILE_INVESTIGATION.md`
@@ -116,6 +125,7 @@
 - 실제 fixture capture는 개발 중 기본값으로 둘지, 계속 opt-in으로 둘지?
 - 실제 Hanwha 세션에서 최소 fixture 세트를 무엇으로 볼지?
 - 빠르게 움직이는 차량에 대해 freshness 또는 hold 규칙을 어떻게 둘지?
+- `profile2` metadata를 video와 분리된 pipeline으로 처리할지?
 
 ## SungHwan 승인 요청
-실제 Hanwha 스트림 기준으로 fixture를 수집하고, non-object overlay 노이즈를 제거하며, 빠른 객체 overlay 동작을 개선하는 방향으로 마일스톤 2를 계속 진행한다.
+`profile4`를 mixed-mode 기준선으로 유지하면서, Tech Lead가 `profile2`의 split video-and-metadata 전략을 검토하는 방향으로 마일스톤 2를 계속 진행한다.

@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <sstream>
 #include <string>
 #include <mutex>
@@ -35,6 +35,7 @@ int g_video_sample_count = 0;
 bool g_missing_video_warned = false;
 std::atomic<bool> g_shutdown_requested = false;
 bool g_enable_metadata = true;
+int g_startup_retry_count = 0;
 
 static std::string caps_to_string(GstCaps* caps) {
     if (!caps) {
@@ -423,6 +424,56 @@ static GstFlowReturn on_new_video_sample(GstElement* sink, gpointer) {
     return GST_FLOW_OK;
 }
 
+static bool restart_pipeline_after_startup_timeout(GstElement* pipeline, int max_startup_retries, std::chrono::steady_clock::time_point& stream_started_at) {
+    if (g_startup_retry_count >= max_startup_retries) {
+        return false;
+    }
+
+    ++g_startup_retry_count;
+    std::ostringstream retry_text;
+    retry_text << "Startup watchdog triggered: retry " << g_startup_retry_count << "/" << max_startup_retries;
+    std::cout << "[WARN] " << retry_text.str() << std::endl;
+    g_logger.log_event(retry_text.str());
+
+    g_logger.log_event("Startup watchdog requesting pipeline reset to NULL");
+    GstStateChangeReturn shutdown_ret = gst_element_set_state(pipeline, GST_STATE_NULL);
+    GstState current_state = GST_STATE_NULL;
+    GstState pending_state = GST_STATE_VOID_PENDING;
+    GstStateChangeReturn wait_ret = gst_element_get_state(pipeline, &current_state, &pending_state, 2 * GST_SECOND);
+
+    std::ostringstream shutdown_text;
+    shutdown_text << "Startup reset wait result: " << gst_element_state_change_return_get_name(wait_ret)
+                  << " | current=" << gst_element_state_get_name(current_state)
+                  << " | pending=" << gst_element_state_get_name(pending_state);
+    g_logger.log_event(std::string("Startup reset state change return: ") + gst_element_state_change_return_get_name(shutdown_ret));
+    g_logger.log_event(shutdown_text.str());
+
+    g_video_sample_count = 0;
+    g_missing_video_warned = false;
+    has_metadata_update = false;
+    {
+        std::lock_guard<std::mutex> frame_lock(frame_mutex);
+        current_frame.release();
+        new_frame_available = false;
+    }
+    {
+        std::lock_guard<std::mutex> meta_lock(meta_mutex);
+        current_objects.clear();
+    }
+    last_parse_status_text = "Restarting stream after startup timeout";
+
+    GstStateChangeReturn play_ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    g_logger.log_event(std::string("Startup retry PLAYING request returned: ") + gst_element_state_change_return_get_name(play_ret));
+    if (play_ret == GST_STATE_CHANGE_FAILURE) {
+        std::cerr << "[ERROR] Startup retry failed to change pipeline state to PLAYING." << std::endl;
+        g_logger.log_event("Startup retry failed to change pipeline state to PLAYING");
+        return false;
+    }
+
+    stream_started_at = std::chrono::steady_clock::now();
+    return true;
+}
+
 static void draw_overlay(cv::Mat& frame, const std::vector<DetectedObject>& objects) {
     int fw = frame.cols;
     int fh = frame.rows;
@@ -494,6 +545,9 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO] Session output directory: " << g_logger.session_dir() << std::endl;
     g_enable_metadata = config.enable_metadata;
     g_logger.log_event(std::string("Metadata branch: ") + (config.enable_metadata ? "enabled" : "disabled"));
+    if (!config.enable_metadata) {
+        g_logger.log_event("Metadata appsink is not created in video-only mode");
+    }
     g_logger.log_event("Config loaded from config.toml");
     g_logger.log_event(std::string("Fixture candidate capture: ") + (config.capture_fixture_candidates ? "enabled" : "disabled"));
 
@@ -512,9 +566,9 @@ int main(int argc, char* argv[]) {
     GstElement* decodebin = gst_element_factory_make("decodebin", "decodebin");
     GstElement* vconv = gst_element_factory_make("videoconvert", "vconv");
     GstElement* video_sink = gst_element_factory_make("appsink", "video_sink");
-    GstElement* meta_sink = gst_element_factory_make("appsink", "meta_sink");
+    GstElement* meta_sink = config.enable_metadata ? gst_element_factory_make("appsink", "meta_sink") : nullptr;
 
-    if (!pipeline || !rtspsrc || !video_queue || !h264_depay || !h264_parse || !decodebin || !vconv || !video_sink || !meta_sink) {
+    if (!pipeline || !rtspsrc || !video_queue || !h264_depay || !h264_parse || !decodebin || !vconv || !video_sink || (config.enable_metadata && !meta_sink)) {
         std::cerr << "[ERROR] Failed to create GStreamer elements." << std::endl;
         g_logger.log_event("Failed to create GStreamer elements");
         return 1;
@@ -532,10 +586,16 @@ int main(int argc, char* argv[]) {
                  "max-buffers", 2, "drop", TRUE, NULL);
     gst_caps_unref(caps_v);
 
-    g_object_set(G_OBJECT(meta_sink), "emit-signals", TRUE, "sync", FALSE, NULL);
+    if (meta_sink) {
+        g_object_set(G_OBJECT(meta_sink), "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
+    }
     g_object_set(G_OBJECT(video_queue), "leaky", 2, "max-size-buffers", 8, NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), rtspsrc, video_queue, h264_depay, h264_parse, decodebin, vconv, video_sink, meta_sink, NULL);
+    if (meta_sink) {
+        gst_bin_add_many(GST_BIN(pipeline), rtspsrc, video_queue, h264_depay, h264_parse, decodebin, vconv, video_sink, meta_sink, NULL);
+    } else {
+        gst_bin_add_many(GST_BIN(pipeline), rtspsrc, video_queue, h264_depay, h264_parse, decodebin, vconv, video_sink, NULL);
+    }
 
     if (!gst_element_link_many(video_queue, h264_depay, h264_parse, decodebin, NULL)) {
         std::cerr << "[ERROR] Failed to link explicit H264 path to decodebin." << std::endl;
@@ -552,7 +612,9 @@ int main(int argc, char* argv[]) {
     g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_src_pad_added), pipeline);
     g_signal_connect(decodebin, "pad-added", G_CALLBACK(on_decodebin_pad_added), vconv);
     g_signal_connect(video_sink, "new-sample", G_CALLBACK(on_new_video_sample), nullptr);
-    g_signal_connect(meta_sink, "new-sample", G_CALLBACK(on_new_meta_sample), &config);
+    if (meta_sink) {
+        g_signal_connect(meta_sink, "new-sample", G_CALLBACK(on_new_meta_sample), &config);
+    }
 
     std::cout << "[INFO] Starting pipeline..." << std::endl;
     g_logger.log_event("Starting pipeline");
@@ -565,7 +627,8 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "[INFO] Streaming. Press ESC to exit." << std::endl;
 
-    const auto stream_started_at = std::chrono::steady_clock::now();
+    auto stream_started_at = std::chrono::steady_clock::now();
+    const int max_startup_retries = 2;
 
     while (true) {
         GstBus* bus = gst_element_get_bus(pipeline);
@@ -627,6 +690,15 @@ int main(int argc, char* argv[]) {
                         g_logger.log_event(std::string("Pipeline buffering: ") + std::to_string(percent) + "%");
                     }
                     break;
+                case GST_MESSAGE_ASYNC_DONE:
+                    g_logger.log_event("Pipeline async-done received");
+                    break;
+                case GST_MESSAGE_STREAM_START:
+                    g_logger.log_event("Pipeline stream-start received");
+                    break;
+                case GST_MESSAGE_LATENCY:
+                    g_logger.log_event("Pipeline latency message received");
+                    break;
                 default:
                     break;
             }
@@ -640,6 +712,12 @@ int main(int argc, char* argv[]) {
             std::cout << "[WARN] No video samples received within 10 seconds." << std::endl;
             g_logger.log_event("No video samples received within 10 seconds");
             g_missing_video_warned = true;
+
+            if (restart_pipeline_after_startup_timeout(pipeline, max_startup_retries, stream_started_at)) {
+                continue;
+            }
+
+            g_logger.log_event("Startup watchdog retries exhausted; keeping pipeline running for manual inspection");
         }
 
         cv::Mat display_frame;
@@ -715,8 +793,4 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO] Done." << std::endl;
     return 0;
 }
-
-
-
-
 

@@ -15,5 +15,6 @@ sample_limit = 5
 output_dir = "fixtures/captured"
 
 [metadata]
-enabled = true
+enabled = false
+
 
