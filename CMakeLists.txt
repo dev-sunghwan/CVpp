@@ -11,6 +11,9 @@ add_executable(${PROJECT_NAME}
     main.cpp
     app_config.cpp
     session_logger.cpp
+    metadata_parser.cpp
+    video_rtsp_session.cpp
+    metadata_rtsp_session.cpp
 )
 
 set(GST_PREFIX "C:/Program Files/gstreamer/1.0/msvc_x86_64")
