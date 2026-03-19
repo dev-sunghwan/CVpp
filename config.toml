@@ -1,5 +1,5 @@
-[rtsp]
-url = "rtsp://admin:Sunap1!!@192.168.4.225/profile4/media.smp"
+﻿[rtsp]
+url = "rtsp://admin:Sunap1!!@192.168.4.225/profile2/media.smp"
 latency = 100
 
 [headers]
@@ -13,3 +13,7 @@ output_root = "output"
 capture_samples = false
 sample_limit = 5
 output_dir = "fixtures/captured"
+
+[metadata]
+enabled = true
+

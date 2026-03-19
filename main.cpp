@@ -6,6 +6,7 @@
 #include <regex>
 #include <chrono>
 #include <map>
+#include <atomic>
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp/rtsp.h>
@@ -18,6 +19,7 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#include <conio.h>
 #endif
 
 cv::Mat current_frame;
@@ -31,6 +33,8 @@ std::string last_parse_status_text = "No metadata parsed yet";
 SessionLogger g_logger;
 int g_video_sample_count = 0;
 bool g_missing_video_warned = false;
+std::atomic<bool> g_shutdown_requested = false;
+bool g_enable_metadata = true;
 
 static std::string caps_to_string(GstCaps* caps) {
     if (!caps) {
@@ -45,6 +49,36 @@ static std::string caps_to_string(GstCaps* caps) {
     return result;
 }
 
+static const char* rtsp_method_label(GstRTSPMethod method) {
+    switch (method) {
+        case GST_RTSP_OPTIONS: return "OPTIONS";
+        case GST_RTSP_DESCRIBE: return "DESCRIBE";
+        case GST_RTSP_ANNOUNCE: return "ANNOUNCE";
+        case GST_RTSP_GET_PARAMETER: return "GET_PARAMETER";
+        case GST_RTSP_PAUSE: return "PAUSE";
+        case GST_RTSP_PLAY: return "PLAY";
+        case GST_RTSP_RECORD: return "RECORD";
+        case GST_RTSP_REDIRECT: return "REDIRECT";
+        case GST_RTSP_SETUP: return "SETUP";
+        case GST_RTSP_SET_PARAMETER: return "SET_PARAMETER";
+        case GST_RTSP_TEARDOWN: return "TEARDOWN";
+        default: return "UNKNOWN";
+    }
+}
+#ifdef _WIN32
+static BOOL WINAPI console_ctrl_handler(DWORD ctrl_type) {
+    switch (ctrl_type) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            g_shutdown_requested = true;
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+#endif
 static const char* parse_status_label(ParseStatus status) {
     switch (status) {
         case ParseStatus::Success:
@@ -174,18 +208,24 @@ static MetadataParseResult parse_onvif_xml(const std::string& xml) {
 }
 
 static gboolean on_before_send(GstElement*, GstRTSPMessage* message, gpointer user_data) {
-    if (!user_data) {
-        return TRUE;
-    }
     auto* custom_headers = static_cast<std::map<std::string, std::string>*>(user_data);
 
     if (message->type == GST_RTSP_MESSAGE_REQUEST) {
         GstRTSPMethod method;
-        const gchar* uri;
+        const gchar* uri = nullptr;
         if (gst_rtsp_message_parse_request(message, &method, &uri, NULL) == GST_RTSP_OK) {
-            if (method == GST_RTSP_DESCRIBE || method == GST_RTSP_PLAY || method == GST_RTSP_SETUP) {
+            std::ostringstream rtsp_text;
+            rtsp_text << "RTSP request: " << rtsp_method_label(method);
+            if (uri) {
+                rtsp_text << " | uri=" << uri;
+            }
+            std::cout << "[RTSP] " << rtsp_text.str() << std::endl;
+            g_logger.log_event(rtsp_text.str());
+
+            if (custom_headers && (method == GST_RTSP_DESCRIBE || method == GST_RTSP_PLAY || method == GST_RTSP_SETUP)) {
                 for (const auto& kv : *custom_headers) {
                     gst_rtsp_message_add_header_by_name(message, kv.first.c_str(), kv.second.c_str());
+                    g_logger.log_event(std::string("Applied RTSP header: ") + kv.first);
                 }
             }
         }
@@ -245,16 +285,15 @@ static void on_src_pad_added(GstElement*, GstPad* new_pad, gpointer user_data) {
               << " | pad=" << GST_PAD_NAME(new_pad)
               << " | caps=" << caps_text << std::endl;
 
-    if (media_str == "video" &&
-        (encoding_str == "H264" || encoding_str == "JPEG" || encoding_str == "MJPEG")) {
+    if (media_str == "video" && encoding_str == "H264") {
         GstElement* video_queue = gst_bin_get_by_name(GST_BIN(pipeline), "video_queue");
         GstPad* sink_pad = gst_element_get_static_pad(video_queue, "sink");
         if (!gst_pad_is_linked(sink_pad)) {
             const GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
             if (link_result == GST_PAD_LINK_OK) {
-                std::cout << "[INFO] Linked video pad to video_queue: " << encoding_str << std::endl;
+                std::cout << "[INFO] Linked H264 video pad to video_queue." << std::endl;
             } else {
-                std::cout << "[WARN] Failed to link video pad to video_queue: "
+                std::cout << "[WARN] Failed to link H264 video pad to video_queue: "
                           << gst_pad_link_get_name(link_result) << std::endl;
             }
         } else {
@@ -262,8 +301,15 @@ static void on_src_pad_added(GstElement*, GstPad* new_pad, gpointer user_data) {
         }
         gst_object_unref(sink_pad);
         gst_object_unref(video_queue);
+    } else if (media_str == "video" && (encoding_str == "JPEG" || encoding_str == "MJPEG")) {
+        std::cout << "[WARN] JPEG/MJPEG video is not handled in explicit H264 mode." << std::endl;
     } else if (media_str == "application" &&
                (encoding_str == "vnd.onvif.metadata" || encoding_str == "VND.ONVIF.METADATA")) {
+        if (!g_enable_metadata) {
+            std::cout << "[INFO] Metadata branch disabled by config. Ignoring ONVIF metadata pad." << std::endl;
+            gst_caps_unref(caps);
+            return;
+        }
         GstElement* meta_sink = gst_bin_get_by_name(GST_BIN(pipeline), "meta_sink");
         GstPad* sink_pad = gst_element_get_static_pad(meta_sink, "sink");
         const GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
@@ -446,8 +492,14 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "[INFO] Session output directory: " << g_logger.session_dir() << std::endl;
+    g_enable_metadata = config.enable_metadata;
+    g_logger.log_event(std::string("Metadata branch: ") + (config.enable_metadata ? "enabled" : "disabled"));
     g_logger.log_event("Config loaded from config.toml");
     g_logger.log_event(std::string("Fixture candidate capture: ") + (config.capture_fixture_candidates ? "enabled" : "disabled"));
+
+#ifdef _WIN32
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+#endif
 
     gst_init(&argc, &argv);
     std::cout << "[INFO] GStreamer core engine initialized." << std::endl;
@@ -455,12 +507,14 @@ int main(int argc, char* argv[]) {
     GstElement* pipeline = gst_pipeline_new("analytics_pipeline");
     GstElement* rtspsrc = gst_element_factory_make("rtspsrc", "mysrc");
     GstElement* video_queue = gst_element_factory_make("queue", "video_queue");
+    GstElement* h264_depay = gst_element_factory_make("rtph264depay", "h264_depay");
+    GstElement* h264_parse = gst_element_factory_make("h264parse", "h264_parse");
     GstElement* decodebin = gst_element_factory_make("decodebin", "decodebin");
     GstElement* vconv = gst_element_factory_make("videoconvert", "vconv");
     GstElement* video_sink = gst_element_factory_make("appsink", "video_sink");
     GstElement* meta_sink = gst_element_factory_make("appsink", "meta_sink");
 
-    if (!pipeline || !rtspsrc || !video_queue || !decodebin || !vconv || !video_sink || !meta_sink) {
+    if (!pipeline || !rtspsrc || !video_queue || !h264_depay || !h264_parse || !decodebin || !vconv || !video_sink || !meta_sink) {
         std::cerr << "[ERROR] Failed to create GStreamer elements." << std::endl;
         g_logger.log_event("Failed to create GStreamer elements");
         return 1;
@@ -481,11 +535,11 @@ int main(int argc, char* argv[]) {
     g_object_set(G_OBJECT(meta_sink), "emit-signals", TRUE, "sync", FALSE, NULL);
     g_object_set(G_OBJECT(video_queue), "leaky", 2, "max-size-buffers", 8, NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), rtspsrc, video_queue, decodebin, vconv, video_sink, meta_sink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), rtspsrc, video_queue, h264_depay, h264_parse, decodebin, vconv, video_sink, meta_sink, NULL);
 
-    if (!gst_element_link(video_queue, decodebin)) {
-        std::cerr << "[ERROR] Failed to link video_queue to decodebin." << std::endl;
-        g_logger.log_event("Failed to link video_queue to decodebin");
+    if (!gst_element_link_many(video_queue, h264_depay, h264_parse, decodebin, NULL)) {
+        std::cerr << "[ERROR] Failed to link explicit H264 path to decodebin." << std::endl;
+        g_logger.log_event("Failed to link explicit H264 path to decodebin");
         return 1;
     }
 
@@ -617,18 +671,52 @@ int main(int argc, char* argv[]) {
             cv::imshow("GStreamer Analytics (ESC to quit)", display_frame);
         }
 
-        if (cv::waitKey(30) == 27) {
-            std::cout << "\n[MAIN] ESC pressed. Shutting down." << std::endl;
-            g_logger.log_event("ESC pressed. Shutting down.");
+        const int window_key = cv::waitKey(30);
+        if (window_key == 27) {
+            std::cout << "\n[MAIN] ESC pressed in display window. Shutting down." << std::endl;
+            g_logger.log_event("ESC pressed in display window. Shutting down.");
             break;
         }
+
+#ifdef _WIN32
+        if (_kbhit()) {
+            const int console_key = _getch();
+            if (console_key == 27 || console_key == 'q' || console_key == 'Q') {
+                std::cout << "\n[MAIN] Console quit key pressed. Shutting down." << std::endl;
+                g_logger.log_event("Console quit key pressed. Shutting down.");
+                break;
+            }
+        }
+
+        if (g_shutdown_requested.load()) {
+            std::cout << "\n[MAIN] Console control event received. Shutting down." << std::endl;
+            g_logger.log_event("Console control event received. Shutting down.");
+            break;
+        }
+#endif
     }
 
-    gst_element_set_state(pipeline, GST_STATE_NULL);
+    g_logger.log_event("Requesting pipeline shutdown (GST_STATE_NULL)");
+    const GstStateChangeReturn shutdown_ret = gst_element_set_state(pipeline, GST_STATE_NULL);
+    g_logger.log_event(std::string("Shutdown state change return: ") + gst_element_state_change_return_get_name(shutdown_ret));
+
+    GstState current_state = GST_STATE_VOID_PENDING;
+    GstState pending_state = GST_STATE_VOID_PENDING;
+    const GstStateChangeReturn wait_ret = gst_element_get_state(pipeline, &current_state, &pending_state, 2 * GST_SECOND);
+    std::ostringstream shutdown_text;
+    shutdown_text << "Shutdown wait result: " << gst_element_state_change_return_get_name(wait_ret)
+                  << " | current=" << gst_element_state_get_name(current_state)
+                  << " | pending=" << gst_element_state_get_name(pending_state);
+    g_logger.log_event(shutdown_text.str());
+
     gst_object_unref(pipeline);
     cv::destroyAllWindows();
     g_logger.log_event("Session stopped");
     std::cout << "[INFO] Done." << std::endl;
     return 0;
 }
+
+
+
+
 

@@ -1,10 +1,10 @@
-# CV++ Tasks
+﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v0.3`
+- Version: `v0.4`
 - Status: `Milestone 2 in progress`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-18`
+- Last Updated: `2026-03-19`
 - Owner: `Software Engineer Agent`
 
 ## Change History
@@ -13,6 +13,7 @@
 | 2026-03-18 | v0.1 | Initial implementation plan for the CV++ v0.1 MVP. |
 | 2026-03-18 | v0.2 | Marked Milestone 1 complete and resolved initial logging-path decisions. |
 | 2026-03-18 | v0.3 | Started Milestone 2 with parser transparency logs, parsed summaries, and optional fixture capture support. |
+| 2026-03-19 | v0.4 | Closed the parallel high-resolution stream investigation for `profile2` and `profile4`. |
 
 ## Summary
 This plan follows the approved PM scope and Tech Lead architecture. The order is intentional: make configuration and raw metadata observability work first, then improve parser trust, then add the minimum verification UI surface needed for fast operator checks.
@@ -42,16 +43,20 @@ Implemented so far:
 - parsed summaries are written to `parsed_summary.log`
 - optional real-session fixture candidate capture is supported through `config.toml`
 - the current parse status is shown as a minimal on-screen banner
+- high-resolution playback is verified for both `profile2` and `profile4`
+- normal shutdown now logs RTSP methods and confirms `PAUSE` plus `TEARDOWN`
 
 Remaining work:
-- run against a real Hanwha stream and collect the first fixture set
+- collect the first representative fixture set from a real Hanwha session
 - verify that unknown pattern cases are surfaced as expected on real metadata
-- decide whether to keep the status banner wording as-is or adjust it after live use
+- separate object overlay logic from non-object event metadata
+- improve overlay behavior for fast-moving vehicles
 
 Done when:
 - raw and parsed outputs can be compared for the same session
 - parser failures no longer fail silently
 - sample fixtures exist from real Hanwha metadata
+- object overlay behavior is trustworthy enough for live verification
 
 ## Milestone 3: Overlay State Isolation
 Goal: make freshness and stale-object behavior easier to trust and maintain.
@@ -96,24 +101,21 @@ Done when:
 ## Resolved Decisions
 - default log path strategy: session-based runtime output folders under `output/session-YYYYMMDD-HHMMSS/`
 - raw metadata log format for v0.1: single plain file per session
+- high-resolution verification baseline: both `profile2` and `profile4` are valid in-app targets
 
 ## Recommendation
-Keep Milestone 2 focused on live parser transparency and real metadata samples. Do not expand into reconnect or layout work yet.
+Keep Milestone 2 focused on live parser transparency, real metadata samples, and better object-overlay trust. Do not expand into reconnect or layout work yet.
 
 ## Parallel Investigation
-High-resolution profile support should be investigated in parallel while `profile10` remains the working baseline.
-
-Investigation tasks:
-- verify camera-side settings for `profile2` and `profile4`
-- test each profile with no competing clients connected
-- compare RTSP negotiation behavior per profile
-- confirm whether missing video is a camera/profile issue or an app-side assumption
+The original high-resolution stream investigation is now closed.
 
 Reference:
 - `docs/projects/CV++/HIGH_RESOLUTION_PROFILE_INVESTIGATION.md`
+
 ## Open Questions
 - Should real fixture capture stay opt-in through config, or become enabled by default during development?
 - What is the smallest acceptable first fixture set from a real Hanwha camera session?
+- What is the right freshness or hold behavior for fast-moving vehicles?
 
 ## Decision Request for SungHwan
-Approve continuing Milestone 2 by collecting real metadata fixtures and validating the new parse-status outputs against a live Hanwha stream.
+Approve continuing Milestone 2 by collecting real metadata fixtures, removing non-object overlay noise, and improving fast-object overlay behavior on the live Hanwha stream.

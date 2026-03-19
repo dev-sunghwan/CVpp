@@ -1,125 +1,105 @@
-# High-Resolution Profile Investigation
+﻿# High-Resolution Profile Investigation
 
 ## Document Control
-- Version: `v0.4`
-- Status: `Partially resolved`
+- Version: `v0.5`
+- Status: `Resolved for profile2 and profile4`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-18`
+- Last Updated: `2026-03-19`
 - Owner: `Tech Lead Agent`
 
+## Change History
+| Date | Version | Summary |
+| --- | --- | --- |
+| 2026-03-18 | v0.1 | Recorded the initial high-resolution playback issue and early hypotheses. |
+| 2026-03-18 | v0.4 | Documented that `profile4` was fixed while `profile2` remained open. |
+| 2026-03-19 | v0.5 | Verified graceful RTSP teardown and confirmed both `profile2` and `profile4` play correctly in the app. |
+
 ## Summary
-The original high-resolution playback issue is resolved for `profile4`, but not yet for `profile2`.
+The high-resolution playback issue is now resolved for both `profile2` and `profile4`.
 
-What is now confirmed:
-- high-resolution playback failure was not primarily a camera-side problem
-- `profile4` works in the app after pipeline changes
-- `profile2` is externally valid, but still does not reach usable playback inside the app
+What is confirmed now:
+- both profiles are valid high-resolution RTSP targets outside the app
+- both profiles now reach `1920x1080` playback inside the app
+- normal shutdown sends RTSP `PAUSE` and `TEARDOWN`
+- the root problem was app-side robustness, not a broken camera profile
 
-This means the broader issue should be treated as an app-side RTSP/GStreamer compatibility problem across profiles, with one working high-resolution baseline and one remaining profile-specific gap.
+## Verified Evidence
+External validation:
+- VLC plays `rtsp://<user>:<password>@<host>/profile2/media.smp` successfully
+- VLC plays `rtsp://<user>:<password>@<host>/profile4/media.smp` successfully
+- `gst-discoverer-1.0` reports `1920x1080` H.264 plus ONVIF metadata for `profile2`
+- SDP comparison showed `profile2` and `profile4` are effectively equivalent at the protocol-description level
 
-## External Validation
-The following checks prove that the camera exposes valid high-resolution streams outside the app.
-
-For `profile4`:
-- VLC plays `rtsp://<user>:<password>@<host>/profile4/media.smp` successfully.
-- `gst-launch-1.0` shows both:
-  - `media=video`, `encoding-name=H264`, `a-framesize=1920-1080`
-  - `media=application`, `encoding-name=VND.ONVIF.METADATA`
-
-For `profile2`:
-- `gst-discoverer-1.0` reports a live RTSP stream with:
-  - H.264 High Profile video
-  - width `1920`
-  - height `1080`
-  - frame rate `30/1`
-  - ONVIF timed metadata present
-
-This is the key conclusion:
-- both `profile4` and `profile2` are valid high-resolution targets externally
-- any remaining failure is in the application's handling path
-
-## App-Side Results
-Working result after the fix for `profile4`:
+App validation for `profile4`:
 - `rtspsrc` exposes metadata and H.264 video pads
-- the app links the video pad successfully
+- the app links the H.264 pad to the video branch successfully
 - `decodebin` produces `video/x-raw` at `1920x1080`
-- the app receives the first video sample successfully
+- the first video sample arrives successfully
 
-Representative app log for `profile4`:
-- `Linked video pad to video_queue: H264`
+App validation for `profile2`:
+- `OPTIONS`, `DESCRIBE`, `SETUP`, and `PLAY` complete successfully
+- `rtspsrc` exposes metadata and H.264 video pads
+- the app links the H.264 pad to the video branch successfully
+- `decodebin` produces `video/x-raw` at `1920x1080`
+- the first video sample arrives successfully
+
+Representative evidence from the verified `profile2` run:
+- `Linked H264 video pad to video_queue.`
 - `decodebin pad-added: src_0 | caps=video/x-raw ... width=(int)1920, height=(int)1080`
 - `First video sample received: 1920x1080`
 
-Current result for `profile2` in the app:
-- pipeline reaches `NULL -> READY -> PAUSED`
-- no dynamic pad logs were observed in the startup capture
-- no metadata samples or parsed summaries were written
-- no first video sample arrived within 10 seconds
+## Root Cause Interpretation
+The issue should be interpreted as an app-side runtime robustness problem.
 
-## Root Cause Analysis
-### Confirmed root cause for `profile4`
-The root cause for the original `profile4` failure was app-side pipeline robustness.
+What we learned from the investigation:
+1. The camera profiles were not invalid. External clients could already play them.
+2. The app path was more fragile than the external control paths.
+3. Fixing one profile did not prove the entire path was stable.
+4. Empty RTSP header values were also unsafe and needed to be filtered out.
 
-Concretely:
-1. A working external probe used `rtspsrc -> queue -> decodebin`.
-2. The app originally linked the RTSP video pad directly to `decodebin`.
-3. That direct path was not robust enough for `profile4`.
-4. After introducing `video_queue` and better pad diagnostics, `profile4` video playback worked correctly.
+The effective fix set was:
+- make the video path more explicit and robust: `rtspsrc -> queue -> rtph264depay -> h264parse -> decodebin`
+- keep RTSP transport on TCP for this verification path
+- disable empty RTSP headers instead of sending blank values
+- improve dynamic-pad and first-sample diagnostics
+- verify normal shutdown behavior with RTSP method logging
 
-### Current interpretation for `profile2`
-`profile2` is not explained by the original camera-profile hypothesis either, because external tools can inspect it successfully.
+## RTSP Session Shutdown Result
+Normal shutdown is now verified.
 
-The leading hypotheses now are:
-1. `profile2` still differs in timing or activation behavior in ways the app does not yet handle well.
-2. The app may still be too sensitive to multi-stream session ordering or startup timing.
-3. The current diagnostics are sufficient to prove the failure remains app-side, but not yet sufficient to isolate the exact trigger for `profile2`.
+Confirmed behavior on exit:
+- the app requests pipeline shutdown cleanly
+- RTSP `PAUSE` is sent
+- RTSP `TEARDOWN` is sent
 
-## Implemented Fixes
-Fixes already applied in the app:
-- add `video_queue` between `rtspsrc` and `decodebin`
-- force RTSP transport over TCP
-- keep `Bestshot` disabled
-- keep `Rate-Control` disabled for this verification path
-- log full caps and pad names for dynamic RTSP and decodebin pads
-- log first received video sample resolution
-- harden config parsing against UTF-8 BOM input
+This removes the earlier concern that repeated tests might leave camera sessions open because of the app's normal exit path.
 
-## What We Learned
+## What This Investigation Taught Us
 ### Technical lesson
-A single working profile does not prove the pipeline is robust across profiles. A fix can solve one stream shape while still leaving another profile-dependent negotiation issue open.
+When two profiles look identical in SDP but only one works, the next step is not to guess harder. The next step is to compare runtime behavior and harden the consumer path.
 
 ### Debugging lesson
-Use control experiments aggressively:
-- VLC is a client-side control
-- `gst-launch-1.0` and `gst-discoverer-1.0` are protocol/path controls
-- the app is only one implementation of the stream consumer
-
-A strong counterexample should change the hypothesis quickly. In this case:
-- first correction: `profile4` was not a camera-definition problem
-- second correction: `profile2` is also not simply an invalid profile
+The useful sequence was:
+1. confirm the issue outside the app with control clients
+2. compare protocol evidence instead of guessing from UI behavior
+3. narrow the failure boundary step by step
+4. change one part of the pipeline at a time
+5. verify shutdown, not just startup
 
 ### Learning point for SungHwan
-The real skill here is not memorizing GStreamer APIs. It is learning to separate:
-- stream validity
-- camera behavior
+The main skill here was not GStreamer syntax. It was learning how to separate:
+- camera validity
+- protocol validity
 - app pipeline behavior
-- evidence from interpretation
+- confirmed evidence
+- interpretation
 
-That separation is what prevented us from making the wrong fix for the wrong reason.
+That separation prevented a wrong conclusion and led to the actual fix.
 
-## Remaining Open Issue
-The high-resolution issue should now be split into two states:
-- resolved: `profile4` playback in the app
-- open: `profile2` playback in the app
+## Current Recommendation
+Treat both `profile2` and `profile4` as valid high-resolution verification targets.
 
-So the correct status is not "fully resolved" and not "camera issue". It is:
-- high-resolution support is proven feasible in the app
-- one additional high-resolution profile still needs targeted debugging
-
-## Recommended Next Step
-Treat `profile4` as the current high-resolution verification baseline and run a focused follow-up investigation for `profile2` only.
-
-That follow-up should compare:
-- app startup logs for `profile2` vs `profile4`
-- whether metadata branch participation affects `profile2`
-- whether startup timing, session ordering, or profile-specific negotiation is different enough to require another pipeline adjustment
+The next engineering focus should move away from stream activation and toward overlay quality:
+- object-only metadata handling
+- fast-moving vehicle tracking quality
+- freshness and hold behavior

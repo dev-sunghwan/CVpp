@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <map>
 #include <string>
@@ -11,6 +11,7 @@ struct AppConfig {
     bool capture_fixture_candidates = false;
     int fixture_sample_limit = 5;
     std::string fixture_output_dir = "fixtures/captured";
+    bool enable_metadata = true;
 };
 
 bool load_config(const std::string& path, AppConfig& config, std::string& error_message);

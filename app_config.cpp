@@ -93,7 +93,9 @@ bool load_config(const std::string& path, AppConfig& config, std::string& error_
                 }
             }
         } else if (section == "headers") {
-            parsed.headers[key] = value;
+            if (!value.empty()) {
+                parsed.headers[key] = value;
+            }
         } else if (section == "logging") {
             if (key == "output_root") {
                 parsed.output_root = value;
@@ -113,6 +115,13 @@ bool load_config(const std::string& path, AppConfig& config, std::string& error_
                 }
             } else if (key == "output_dir") {
                 parsed.fixture_output_dir = value;
+            }
+        } else if (section == "metadata") {
+            if (key == "enabled") {
+                if (!parse_bool(value, parsed.enable_metadata)) {
+                    error_message = "Invalid boolean for metadata.enabled at line " + std::to_string(line_number);
+                    return false;
+                }
             }
         }
     }
