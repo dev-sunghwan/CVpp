@@ -296,8 +296,10 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     const gchar* encoding_name = gst_structure_get_string(structure, "encoding-name");
     std::string media_str = media ? media : "unknown";
     std::string encoding_str = encoding_name ? encoding_name : "unknown";
-    const bool select = media_str == "application" &&
-                        (encoding_str == "VND.ONVIF.METADATA" || encoding_str == "vnd.onvif.metadata");
+    const bool is_metadata = media_str == "application" &&
+                             (encoding_str == "VND.ONVIF.METADATA" || encoding_str == "vnd.onvif.metadata");
+    const bool is_video = media_str == "video";
+    const bool select = is_video || is_metadata;
 
     std::ostringstream text;
     text << "MetadataSession: select-stream index=" << stream_index
@@ -307,3 +309,5 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     self->logger_.log_event(text.str());
     return select;
 }
+
+
