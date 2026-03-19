@@ -1,10 +1,10 @@
 ﻿# CV++ Architecture
 
 ## Document Control
-- Version: `v0.3`
-- Status: `Approved`
+- Version: `v0.4`
+- Status: `Approved with split-pipeline direction`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-18`
+- Last Updated: `2026-03-19`
 - Owner: `Tech Lead Agent`
 
 ## Change History
@@ -13,39 +13,51 @@
 | 2026-03-18 | v0.1 | Initial lightweight architecture for the CV++ verification-focused MVP. |
 | 2026-03-18 | v0.2 | Resolved initial architecture choices for logging, reconnect behavior, and config format. |
 | 2026-03-18 | v0.3 | Marked the current architecture as approved. |
+| 2026-03-19 | v0.4 | Updated the architecture to prefer split video and metadata handling after profile2 mixed-pipeline instability findings. |
 
 ## Summary
-For v0.1, the architecture should stay as a single-process desktop application in C++ built around GStreamer for RTSP transport and OpenCV for frame rendering and overlay drawing. The goal is not a general platform yet. It is a practical verification tool for Hanwha RTSP streams, custom headers, and metadata observability.
+For v0.1, the architecture should remain a single-process desktop application in C++ using GStreamer and OpenCV. However, the runtime strategy should now prefer a split structure: keep video playback as the stable baseline, and handle metadata in a separate path that cannot destabilize the video path.
 
-## Proposed v0.1 Architecture
-Use one executable with a small number of internal modules:
+This is still a practical verification tool for Hanwha RTSP streams, custom headers, and metadata observability. It is not yet a general AI video platform.
+
+## Recommended Runtime Direction
+Use one executable with small internal modules, but do not treat one mixed RTSP graph as the only baseline.
 
 ```text
 Config
-  -> RtspSession
-      -> VideoPipeline
-      -> MetadataPipeline
+  -> SessionCoordinator
+      -> VideoRtspSession
+      -> MetadataRtspSession
   -> MetadataParser
   -> OverlayState
   -> VerificationView
   -> Logging
 ```
 
-Module responsibilities:
-- `Config`: load RTSP URL, headers, latency, and output options from a file.
-- `RtspSession`: own pipeline startup, shutdown, reconnect, and shared runtime state.
-- `VideoPipeline`: receive decoded frames and expose them as `cv::Mat`.
-- `MetadataPipeline`: receive raw metadata payloads and forward them to logging and parsing.
+## Why The Split Direction Is Recommended
+Recent debugging showed:
+- `profile4` is stable in mixed mode
+- `profile2` is intermittent in mixed mode
+- `profile2` is materially more stable in video-only mode
+- metadata participation in the same pipeline can increase startup instability
+
+That means a mixed graph is still acceptable as an experiment path, but it is not a safe architecture baseline for all profiles.
+
+## Module Responsibilities
+- `Config`: load RTSP URL, headers, latency, output options, and metadata enablement from a file.
+- `SessionCoordinator`: own startup, shutdown, retry, and high-level synchronization between video and metadata sessions.
+- `VideoRtspSession`: prioritize stable decoded frames and expose them as `cv::Mat`.
+- `MetadataRtspSession`: receive raw metadata payloads, log them, and forward them to parsing without being allowed to break video startup.
 - `MetadataParser`: convert raw XML or text payloads into a normalized internal object list.
 - `OverlayState`: hold only fresh objects and clear stale detections safely.
 - `VerificationView`: show video, overlays, parsed summary, and recent raw metadata evidence in one operator-facing screen.
-- `Logging`: persist raw metadata samples, parser failures, and session events.
+- `Logging`: persist raw metadata samples, parser failures, RTSP method logs, startup watchdog retries, and session events.
 
 ## Data Flow
 1. `Config` loads stream and header settings.
-2. `RtspSession` builds the GStreamer pipeline and injects custom RTSP headers.
-3. `VideoPipeline` emits frames for display.
-4. `MetadataPipeline` emits raw metadata payloads.
+2. `SessionCoordinator` starts the stable video session first.
+3. `VideoRtspSession` establishes the video baseline and emits frames for display.
+4. `MetadataRtspSession` starts separately and emits raw metadata payloads.
 5. `Logging` stores raw payloads before parsing.
 6. `MetadataParser` produces normalized detections and parse status.
 7. `OverlayState` updates current visible objects based on freshness rules.
@@ -57,29 +69,57 @@ Module responsibilities:
 - Frame and overlay handling: OpenCV
 - Config format: TOML
 - Persistence for v0.1: plain file logging first; SQLite only if raw history becomes immediately necessary
-- Connection recovery for v0.1: simple automatic reconnect with visible status and session logs
+- Connection recovery for v0.1: simple startup retry plus visible status and session logs
 
-## PM Decisions Still Worth Confirming
-The MVP direction is already clear enough to start, but these PM decisions would reduce churn:
-- exact verification UI layout priority: raw metadata panel always visible or toggleable
-- minimum supported operator workflow: live verification only, or live plus post-run review
-- success threshold for “good enough” parser coverage on early Hanwha samples
+## Mixed Pipeline Policy
+Treat the mixed pipeline as optional, not foundational.
+
+Use it when:
+- a profile is already known to be stable in mixed mode
+- the reduced implementation complexity is worth it for that profile
+
+Do not depend on it as the universal architecture baseline because current evidence shows profile-dependent instability.
+
+## Tradeoffs
+Benefits of the split direction:
+- video stability is protected from metadata instability
+- debugging boundaries become much clearer
+- retries and recovery can be tuned separately
+- profile-specific behavior becomes easier to isolate
+
+Costs of the split direction:
+- timestamp alignment becomes more explicit work
+- session management is slightly more complex
+- reconnect and health state need coordination across two paths
+
+At this stage, those costs are acceptable because the product is still a verification tool. Stability and observability matter more than architectural elegance.
+
+## SE Handoff Guidance
+The next implementation steps should be:
+1. keep `profile4` as the mixed-mode baseline for ongoing validation
+2. keep `profile2` video-only as the stable diagnostic baseline
+3. refactor the current runtime into `VideoRtspSession` and `MetadataRtspSession` responsibilities, even if both still live in one process
+4. make overlay updates depend on parsed metadata availability, not on metadata pipeline ownership of the video graph
+5. preserve the startup watchdog for unstable sessions
+6. avoid re-coupling metadata startup to video startup during refactoring
 
 ## Key Concerns
 - Regex parsing is acceptable only if parse failures are explicit and raw payloads are preserved.
-- A large refactor is not needed now, but `main.cpp` should stop owning every responsibility.
-- If the verification view becomes too ambitious, UI work will slow core metadata validation.
+- `main.cpp` should continue shrinking in responsibility.
+- Do not overbuild synchronization logic before the metadata behavior is stable enough to justify it.
 
-## Recommendations
-- Start with a modular monolith, not multiple processes or services.
-- Log raw metadata first, then parse, then render.
-- Keep the verification UI simple and evidence-oriented.
-- Add sample raw metadata fixtures from real cameras as soon as capture works.
+## Recommendation
+Approve the split direction as the implementation baseline.
+
+In practical terms:
+- `profile4` remains the current mixed-mode validation baseline
+- `profile2` should not be treated as a reliable mixed-mode baseline yet
+- future implementation should separate stable video transport from metadata transport as much as possible inside the app
 
 ## Open Questions
-- Should the raw metadata panel stay always visible in the default verification view, or be collapsible?
-- Is live verification alone sufficient for v0.1, or should the operator also review saved logs inside the app?
-- What parser coverage threshold is acceptable for the first real Hanwha sample set?
+- Should `profile2` metadata use a fully separate RTSP session, or a separately managed branch within the same process?
+- What timestamp alignment strategy is sufficient for v0.1: latest-metadata-wins, bounded freshness window, or explicit timestamp matching?
+- When should the team retire mixed mode entirely for unstable profiles?
 
 ## Decision Request for SungHwan
-Approved architecture: a modular single-process C++ desktop application for v0.1, with GStreamer transport, OpenCV rendering, file-based config, raw metadata logging, and a one-screen verification UI.
+Approved architecture direction: keep a modular single-process C++ desktop application, but move the runtime baseline toward split video and metadata handling so metadata cannot destabilize high-resolution video verification.

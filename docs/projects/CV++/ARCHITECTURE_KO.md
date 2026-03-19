@@ -1,10 +1,10 @@
 ﻿# CV++ 아키텍처
 
 ## 문서 정보
-- 버전: `v0.3`
-- 상태: `승인 완료`
+- 버전: `v0.4`
+- 상태: `분리 구조 방향으로 승인`
 - 작성일: `2026-03-18`
-- 최종 수정일: `2026-03-18`
+- 최종 수정일: `2026-03-19`
 - 작성 주체: `Tech Lead Agent`
 
 ## 변경 이력
@@ -13,39 +13,51 @@
 | 2026-03-18 | v0.1 | CV++의 검증 중심 MVP를 위한 초기 경량 아키텍처 문서 작성 |
 | 2026-03-18 | v0.2 | 초기 아키텍처 선택지 중 logging, 재연결, config 형식을 확정 |
 | 2026-03-18 | v0.3 | 현재 아키텍처를 승인 상태로 반영 |
+| 2026-03-19 | v0.4 | `profile2` mixed pipeline 불안정 결과를 반영해 video와 metadata 분리 방향으로 업데이트 |
 
 ## 요약
-v0.1에서 아키텍처는 C++ 단일 프로세스 데스크톱 애플리케이션으로 유지하는 것이 적절하다. RTSP 전송은 GStreamer, 프레임 렌더링과 오버레이는 OpenCV를 중심으로 구성한다. 지금 목표는 범용 플랫폼이 아니라 Hanwha RTSP 스트림, 커스텀 헤더, 메타데이터 관측성을 검증하는 실용 도구를 만드는 것이다.
+v0.1에서 아키텍처는 여전히 C++ 단일 프로세스 데스크톱 애플리케이션으로 유지하는 것이 적절하다. 다만 런타임 전략은 이제 분리 구조를 우선해야 한다. 즉, 비디오는 안정적인 기준선으로 유지하고, metadata는 비디오 경로를 불안정하게 만들지 않는 별도 경로로 다루어야 한다.
 
-## 제안하는 v0.1 아키텍처
-하나의 실행 파일 안에 소수의 내부 모듈만 둔다.
+지금 목표는 여전히 범용 플랫폼이 아니라 Hanwha RTSP 스트림, 커스텀 헤더, 메타데이터 관측성을 검증하는 실용 도구를 만드는 것이다.
+
+## 권장 런타임 방향
+하나의 실행 파일 안에 소수의 내부 모듈만 두되, 하나의 mixed RTSP graph를 유일한 기준선으로 보지 않는다.
 
 ```text
 Config
-  -> RtspSession
-      -> VideoPipeline
-      -> MetadataPipeline
+  -> SessionCoordinator
+      -> VideoRtspSession
+      -> MetadataRtspSession
   -> MetadataParser
   -> OverlayState
   -> VerificationView
   -> Logging
 ```
 
-각 모듈의 책임은 다음과 같다.
-- `Config`: RTSP URL, 헤더, latency, 출력 옵션을 파일에서 읽는다.
-- `RtspSession`: 파이프라인 시작, 종료, 재연결, 공통 런타임 상태를 관리한다.
-- `VideoPipeline`: 디코딩된 비디오 프레임을 받아 `cv::Mat` 형태로 노출한다.
-- `MetadataPipeline`: raw metadata payload를 받아 로깅과 파싱으로 전달한다.
+## 왜 분리 방향이 맞는가
+최근 디버깅에서 확인된 점:
+- `profile4`는 mixed mode에서 안정적임
+- `profile2`는 mixed mode에서 간헐적임
+- `profile2`는 video-only mode에서 훨씬 안정적임
+- metadata가 같은 pipeline에 참여할 때 startup 불안정성이 커질 수 있음
+
+즉, mixed graph는 실험 경로로는 유지할 수 있지만, 모든 profile에 대한 안전한 운영 기준선으로 보기는 어렵다.
+
+## 각 모듈의 책임
+- `Config`: RTSP URL, 헤더, latency, output 옵션, metadata enablement를 파일에서 읽는다.
+- `SessionCoordinator`: 시작, 종료, 재시도, video 세션과 metadata 세션 간의 상위 조정을 관리한다.
+- `VideoRtspSession`: 안정적인 디코딩 프레임을 우선시하고 `cv::Mat` 형태로 노출한다.
+- `MetadataRtspSession`: raw metadata payload를 받아 로깅과 파싱으로 전달하되, video startup을 망치지 않도록 독립적으로 다룬다.
 - `MetadataParser`: raw XML 또는 텍스트 payload를 정규화된 내부 객체 목록으로 변환한다.
 - `OverlayState`: freshness 기준에 따라 현재 유효한 객체만 유지하고 stale detection을 제거한다.
 - `VerificationView`: 영상, overlay, parsed summary, 최근 raw metadata 근거를 한 화면에 보여준다.
-- `Logging`: raw metadata 샘플, parser 실패, 세션 이벤트를 기록한다.
+- `Logging`: raw metadata 샘플, parser 실패, RTSP method 로그, startup watchdog 재시도, 세션 이벤트를 기록한다.
 
 ## 데이터 흐름
 1. `Config`가 스트림과 헤더 설정을 로드한다.
-2. `RtspSession`이 GStreamer 파이프라인을 만들고 커스텀 RTSP 헤더를 주입한다.
-3. `VideoPipeline`이 표시용 프레임을 전달한다.
-4. `MetadataPipeline`이 raw metadata payload를 전달한다.
+2. `SessionCoordinator`가 안정적인 video 세션을 먼저 시작한다.
+3. `VideoRtspSession`이 비디오 기준선을 만들고 표시용 프레임을 전달한다.
+4. `MetadataRtspSession`이 별도로 시작되어 raw metadata payload를 전달한다.
 5. `Logging`이 파싱 전에 raw payload를 저장한다.
 6. `MetadataParser`가 정규화된 detection과 parse 상태를 만든다.
 7. `OverlayState`가 freshness 규칙에 따라 현재 표시 객체를 갱신한다.
@@ -57,29 +69,57 @@ Config
 - 프레임 및 overlay 처리: OpenCV
 - 설정 형식: TOML
 - v0.1 저장 방식: 우선 plain file 로그, raw history 필요성이 즉시 높아질 때만 SQLite 검토
-- v0.1 연결 복구 방식: 단순 자동 재연결 + 상태 표시 + 세션 로그
+- v0.1 복구 방식: startup retry + 상태 표시 + 세션 로그
 
-## PM이 추가로 확정하면 좋은 항목
-MVP 방향만으로도 착수는 가능하지만, 아래 항목을 먼저 정하면 구현 중 변경이 줄어든다.
-- 검증 UI 레이아웃 우선순위: raw metadata 패널을 항상 노출할지, 토글형으로 둘지
-- 최소 운영 흐름을 실시간 검증만으로 볼지, 사후 검토까지 포함할지
-- 초기 Hanwha 샘플 기준으로 parser coverage를 어디까지면 충분하다고 볼지
+## Mixed Pipeline 정책
+mixed pipeline은 선택적 경로로 두고, 기반 구조로 보지 않는다.
+
+사용 가능한 경우:
+- 특정 profile이 mixed mode에서 이미 안정적이라고 확인된 경우
+- 해당 profile에 한해 구현 단순성이 더 중요할 경우
+
+하지만 모든 profile에 대한 공통 기준선으로 의존하지는 않는다. 현재 증거상 profile별 불안정성이 존재하기 때문이다.
+
+## Tradeoff
+분리 방향의 장점:
+- metadata 불안정성이 video 안정성을 망치지 않음
+- 디버깅 경계가 훨씬 명확해짐
+- retry 및 복구 정책을 각각 조정하기 쉬움
+- profile별 차이를 더 쉽게 분리해 관찰할 수 있음
+
+분리 방향의 단점:
+- timestamp 정렬을 별도로 고민해야 함
+- 세션 관리가 조금 더 복잡해짐
+- reconnect 및 health state를 두 경로에 걸쳐 조정해야 함
+
+하지만 현재 단계에서는 이 비용이 감당 가능하다. 이 제품은 아직 플레이어나 운영 플랫폼이 아니라 검증 도구이기 때문이다. 지금은 구조 미학보다 안정성과 관측성이 더 중요하다.
+
+## SE 반영 가이드
+다음 구현 순서는 이렇게 권장한다.
+1. `profile4`를 mixed-mode 검증 기준선으로 유지한다.
+2. `profile2`는 video-only 안정 기준선으로 유지한다.
+3. 현재 런타임을 `VideoRtspSession`과 `MetadataRtspSession` 책임으로 분리한다. 둘 다 같은 프로세스 안에 있어도 된다.
+4. overlay 갱신은 metadata 파싱 결과에 의존하게 하고, metadata pipeline이 video graph를 소유하지 않게 한다.
+5. startup watchdog은 유지한다.
+6. 리팩터링 중 metadata startup이 다시 video startup을 묶지 않게 주의한다.
 
 ## 핵심 우려 사항
 - Regex 파싱은 파싱 실패가 명시적으로 드러나고 raw payload가 보존될 때만 허용 가능하다.
-- 지금 대규모 리팩터링은 필요 없지만, `main.cpp`가 모든 책임을 계속 가지면 안 된다.
-- 검증 화면이 과도하게 커지면 UI 작업이 핵심 metadata 검증 속도를 늦출 수 있다.
+- `main.cpp`는 계속 책임을 줄여가야 한다.
+- metadata 동작이 충분히 안정되기 전에는 동기화 로직을 과도하게 키우지 않는다.
 
 ## 권고
-- 다중 프로세스나 서비스 분리 대신 모듈형 단일 애플리케이션으로 시작한다.
-- raw metadata를 먼저 기록하고, 그 다음 파싱하고, 마지막에 렌더링한다.
-- 검증 UI는 단순하고 evidence-oriented하게 유지한다.
-- raw metadata capture가 되면 실제 카메라 샘플 fixture를 빠르게 축적한다.
+분리 구조 방향을 구현 기준선으로 승인하는 것이 맞다.
+
+실무적으로는 다음 의미를 가진다.
+- `profile4`는 현재 mixed-mode 검증 기준선으로 유지
+- `profile2`는 아직 reliable mixed-mode baseline으로 보지 않음
+- 앞으로 구현은 앱 내부에서 stable video transport와 metadata transport를 가능한 한 분리하는 쪽으로 진행
 
 ## 열린 질문
-- 기본 검증 화면에서 raw metadata 패널을 항상 보이게 둘지, 접을 수 있게 둘지?
-- v0.1에서 실시간 검증만 지원하면 충분한지, 앱 내부에서 저장 로그 재검토까지 지원해야 하는지?
-- 첫 Hanwha 실측 샘플 세트에 대해 어느 정도 parser coverage를 만족 기준으로 볼지?
+- `profile2` metadata를 완전히 별도 RTSP 세션으로 둘지, 같은 프로세스 안의 별도 관리 경로로 둘지?
+- v0.1에서 어떤 timestamp 정렬 전략이 충분한가: latest-metadata-wins, bounded freshness window, 혹은 명시적 timestamp matching?
+- 불안정한 profile에 대해 mixed mode를 언제 공식적으로 내려놓을 것인가?
 
 ## SungHwan 승인 요청
-승인된 아키텍처: v0.1에 대해 GStreamer 전송, OpenCV 렌더링, 파일 기반 설정, raw metadata logging, 단일 검증 화면을 포함한 모듈형 단일 프로세스 C++ 데스크톱 구조.
+승인할 아키텍처 방향: 모듈형 단일 프로세스 C++ 데스크톱 구조는 유지하되, 고해상도 검증에서 metadata가 video를 불안정하게 만들지 않도록 runtime 기준선을 video와 metadata 분리 구조로 옮긴다.
