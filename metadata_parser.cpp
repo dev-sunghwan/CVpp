@@ -36,6 +36,15 @@ std::string summarize_objects(const std::vector<DetectedObject>& objects) {
     return summary.str();
 }
 
+bool contains_video_analytics_frame(const std::string& xml) {
+    return xml.find("<tt:VideoAnalytics") != std::string::npos &&
+           xml.find("<tt:Frame") != std::string::npos;
+}
+
+bool contains_object_blocks(const std::string& xml) {
+    return xml.find("<tt:Object ObjectId=") != std::string::npos;
+}
+
 MetadataParseResult parse_onvif_xml(const std::string& xml) {
     MetadataParseResult result;
 

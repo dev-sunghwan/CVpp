@@ -63,6 +63,7 @@ bool MetadataRtspSession::start() {
                  "protocols", GST_RTSP_LOWER_TRANS_TCP,
                  NULL);
     g_signal_connect(rtspsrc, "before-send", G_CALLBACK(MetadataRtspSession::on_before_send), this);
+    g_signal_connect(rtspsrc, "select-stream", G_CALLBACK(MetadataRtspSession::on_select_stream), this);
 
     g_object_set(G_OBJECT(meta_sink_), "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
 
@@ -247,6 +248,9 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
             }
         }
 
+        const bool has_video_analytics = contains_video_analytics_frame(xml_str);
+        const bool has_objects = contains_object_blocks(xml_str);
+
         MetadataParseResult parse_result = parse_onvif_xml(xml_str);
         std::string summary = std::string("status=") + parse_status_label(parse_result.status) +
                               " message=\"" + parse_result.message + "\" " +
@@ -254,16 +258,24 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
         self->logger_.log_parsed_summary(summary);
         self->logger_.log_event(std::string("MetadataSession: parse result: ") + summary);
 
-        self->state_.last_parse_status_text = std::string("Parse: ") + parse_status_label(parse_result.status) +
-                                              " | objects=" + std::to_string(parse_result.objects.size());
+        if (has_video_analytics) {
+            self->state_.last_parse_status_text = std::string("Parse: ") + parse_status_label(parse_result.status) +
+                                                  " | objects=" + std::to_string(parse_result.objects.size());
 
-        if (parse_result.status == ParseStatus::Success ||
-            parse_result.status == ParseStatus::UnknownPattern ||
-            parse_result.status == ParseStatus::NoObjects) {
             std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
-            self->state_.current_objects = std::move(parse_result.objects);
-            self->state_.last_metadata_update = std::chrono::steady_clock::now();
-            self->state_.has_metadata_update = true;
+            if (has_objects &&
+                (parse_result.status == ParseStatus::Success || parse_result.status == ParseStatus::UnknownPattern)) {
+                self->state_.current_objects = std::move(parse_result.objects);
+                self->state_.last_metadata_update = std::chrono::steady_clock::now();
+                self->state_.has_metadata_update = true;
+            } else if (!has_objects && parse_result.status == ParseStatus::NoObjects) {
+                self->state_.current_objects.clear();
+                self->state_.last_metadata_update = std::chrono::steady_clock::now();
+                self->state_.has_metadata_update = true;
+            }
+        } else {
+            self->state_.last_parse_status_text = "Parse: event-only | overlay unchanged";
+            self->logger_.log_event("MetadataSession: event-only metadata ignored for overlay state");
         }
     } else {
         self->logger_.log_event("MetadataSession: metadata payload received without XML start marker");
@@ -274,4 +286,24 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
     gst_buffer_unmap(buffer, &map);
     gst_sample_unref(sample);
     return GST_FLOW_OK;
+}
+
+
+gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, GstCaps* caps, gpointer user_data) {
+    auto* self = static_cast<MetadataRtspSession*>(user_data);
+    GstStructure* structure = gst_caps_get_structure(caps, 0);
+    const gchar* media = gst_structure_get_string(structure, "media");
+    const gchar* encoding_name = gst_structure_get_string(structure, "encoding-name");
+    std::string media_str = media ? media : "unknown";
+    std::string encoding_str = encoding_name ? encoding_name : "unknown";
+    const bool select = media_str == "application" &&
+                        (encoding_str == "VND.ONVIF.METADATA" || encoding_str == "vnd.onvif.metadata");
+
+    std::ostringstream text;
+    text << "MetadataSession: select-stream index=" << stream_index
+         << " media=" << media_str
+         << " encoding=" << encoding_str
+         << " selected=" << (select ? "true" : "false");
+    self->logger_.log_event(text.str());
+    return select;
 }

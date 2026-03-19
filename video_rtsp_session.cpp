@@ -61,6 +61,7 @@ bool VideoRtspSession::start() {
                  "protocols", GST_RTSP_LOWER_TRANS_TCP,
                  NULL);
     g_signal_connect(rtspsrc, "before-send", G_CALLBACK(VideoRtspSession::on_before_send), this);
+    g_signal_connect(rtspsrc, "select-stream", G_CALLBACK(VideoRtspSession::on_select_stream), this);
 
     GstCaps* caps_v = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "BGR", NULL);
     g_object_set(G_OBJECT(video_sink_), "caps", caps_v, "emit-signals", TRUE, "sync", FALSE, "async", FALSE,
@@ -377,4 +378,24 @@ GstFlowReturn VideoRtspSession::on_new_video_sample(GstElement* sink, gpointer u
     gst_buffer_unmap(buffer, &map);
     gst_sample_unref(sample);
     return GST_FLOW_OK;
+}
+
+
+
+gboolean VideoRtspSession::on_select_stream(GstElement*, guint stream_index, GstCaps* caps, gpointer user_data) {
+    auto* self = static_cast<VideoRtspSession*>(user_data);
+    GstStructure* structure = gst_caps_get_structure(caps, 0);
+    const gchar* media = gst_structure_get_string(structure, "media");
+    const gchar* encoding_name = gst_structure_get_string(structure, "encoding-name");
+    std::string media_str = media ? media : "unknown";
+    std::string encoding_str = encoding_name ? encoding_name : "unknown";
+    const bool select = media_str == "video";
+
+    std::ostringstream text;
+    text << "VideoSession: select-stream index=" << stream_index
+         << " media=" << media_str
+         << " encoding=" << encoding_str
+         << " selected=" << (select ? "true" : "false");
+    self->logger_.log_event(text.str());
+    return select;
 }

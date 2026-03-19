@@ -20,6 +20,7 @@ public:
 
 private:
     static gboolean on_before_send(GstElement*, GstRTSPMessage* message, gpointer user_data);
+    static gboolean on_select_stream(GstElement*, guint stream_index, GstCaps* caps, gpointer user_data);
     static void on_src_pad_added(GstElement*, GstPad* new_pad, gpointer user_data);
     static void on_decodebin_pad_added(GstElement*, GstPad* new_pad, gpointer user_data);
     static GstFlowReturn on_new_video_sample(GstElement* sink, gpointer user_data);
