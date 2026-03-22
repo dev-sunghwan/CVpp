@@ -16,6 +16,12 @@ add_executable(${PROJECT_NAME}
     metadata_rtsp_session.cpp
 )
 
+add_executable(metadata_probe
+    metadata_probe.cpp
+    app_config.cpp
+    metadata_parser.cpp
+)
+
 set(GST_PREFIX "C:/Program Files/gstreamer/1.0/msvc_x86_64")
 set(GST_INCLUDE_DIRS
     "${GST_PREFIX}/include/gstreamer-1.0"
@@ -28,3 +34,7 @@ set(GST_LIBS gstreamer-1.0 gobject-2.0 glib-2.0 gstapp-1.0 gstrtsp-1.0)
 target_include_directories(${PROJECT_NAME} PRIVATE ${OpenCV_INCLUDE_DIRS} ${GST_INCLUDE_DIRS})
 target_link_directories(${PROJECT_NAME} PRIVATE ${GST_LIBRARY_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE ${OpenCV_LIBS} ${GST_LIBS} ws2_32)
+
+target_include_directories(metadata_probe PRIVATE ${GST_INCLUDE_DIRS})
+target_link_directories(metadata_probe PRIVATE ${GST_LIBRARY_DIRS})
+target_link_libraries(metadata_probe PRIVATE ${GST_LIBS} ws2_32)

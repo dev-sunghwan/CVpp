@@ -130,7 +130,38 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (!metadata_session.start()) {
+    bool metadata_started = false;
+    if (config.enable_metadata) {
+        std::cout << "[INFO] Waiting for first video frame before starting metadata session..." << std::endl;
+        logger.log_event("Main: waiting for first video frame before starting metadata session");
+
+        const auto startup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        while (std::chrono::steady_clock::now() < startup_deadline) {
+            video_session.poll_bus_once(50 * GST_MSECOND);
+
+            bool video_ready = false;
+            {
+                std::lock_guard<std::mutex> lock(shared_state.frame_mutex);
+                video_ready = !shared_state.current_frame.empty();
+            }
+
+            if (video_ready) {
+                break;
+            }
+
+#ifdef _WIN32
+            if (g_shutdown_requested.load()) {
+                break;
+            }
+#endif
+        }
+
+        if (!metadata_session.start()) {
+            std::cerr << "[ERROR] Failed to start MetadataRtspSession." << std::endl;
+            return 1;
+        }
+        metadata_started = true;
+    } else if (!metadata_session.start()) {
         std::cerr << "[ERROR] Failed to start MetadataRtspSession." << std::endl;
         return 1;
     }
@@ -139,7 +170,9 @@ int main(int argc, char* argv[]) {
 
     while (true) {
         video_session.poll_bus_once();
-        metadata_session.poll_bus_once();
+        if (metadata_started) {
+            metadata_session.poll_bus_once();
+        }
 
         cv::Mat display_frame;
         {
@@ -195,7 +228,9 @@ int main(int argc, char* argv[]) {
 #endif
     }
 
-    metadata_session.stop();
+    if (metadata_started) {
+        metadata_session.stop();
+    }
     video_session.stop();
     cv::destroyAllWindows();
     logger.log_event("Session stopped");

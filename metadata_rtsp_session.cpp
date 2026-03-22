@@ -51,8 +51,9 @@ bool MetadataRtspSession::start() {
     pipeline_ = gst_pipeline_new("metadata_pipeline");
     GstElement* rtspsrc = gst_element_factory_make("rtspsrc", "metadata_src");
     meta_sink_ = gst_element_factory_make("appsink", "meta_sink");
+    video_sink_ = gst_element_factory_make("fakesink", "metadata_video_sink");
 
-    if (!pipeline_ || !rtspsrc || !meta_sink_) {
+    if (!pipeline_ || !rtspsrc || !meta_sink_ || !video_sink_) {
         logger_.log_event("MetadataSession: failed to create GStreamer elements");
         return false;
     }
@@ -66,8 +67,9 @@ bool MetadataRtspSession::start() {
     g_signal_connect(rtspsrc, "select-stream", G_CALLBACK(MetadataRtspSession::on_select_stream), this);
 
     g_object_set(G_OBJECT(meta_sink_), "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
+    g_object_set(G_OBJECT(video_sink_), "sync", FALSE, "async", FALSE, NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline_), rtspsrc, meta_sink_, NULL);
+    gst_bin_add_many(GST_BIN(pipeline_), rtspsrc, meta_sink_, video_sink_, NULL);
     g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(MetadataRtspSession::on_src_pad_added), this);
     g_signal_connect(meta_sink_, "new-sample", G_CALLBACK(MetadataRtspSession::on_new_meta_sample), this);
 
@@ -78,6 +80,10 @@ bool MetadataRtspSession::start() {
         return false;
     }
 
+    metadata_sample_count_ = 0;
+    missing_metadata_warned_ = false;
+    startup_retry_count_ = 0;
+    stream_started_at_ = std::chrono::steady_clock::now();
     return true;
 }
 
@@ -102,6 +108,7 @@ void MetadataRtspSession::stop() {
     gst_object_unref(pipeline_);
     pipeline_ = nullptr;
     meta_sink_ = nullptr;
+    video_sink_ = nullptr;
 }
 
 void MetadataRtspSession::poll_bus_once(GstClockTime timeout) {
@@ -116,6 +123,57 @@ void MetadataRtspSession::poll_bus_once(GstClockTime timeout) {
         gst_message_unref(msg);
     }
     gst_object_unref(bus);
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!missing_metadata_warned_ && metadata_sample_count_ == 0 &&
+        std::chrono::duration_cast<std::chrono::seconds>(now - stream_started_at_).count() >= 8) {
+        logger_.log_event("MetadataSession: no metadata samples received within 8 seconds");
+        missing_metadata_warned_ = true;
+        restart_after_startup_timeout();
+    }
+}
+
+bool MetadataRtspSession::restart_after_startup_timeout() {
+    if (startup_retry_count_ >= max_startup_retries_) {
+        logger_.log_event("MetadataSession: startup watchdog retries exhausted; keeping pipeline running for manual inspection");
+        return false;
+    }
+
+    ++startup_retry_count_;
+    std::ostringstream retry_text;
+    retry_text << "Startup watchdog triggered: retry " << startup_retry_count_ << "/" << max_startup_retries_;
+    logger_.log_event(std::string("MetadataSession: ") + retry_text.str());
+
+    GstStateChangeReturn shutdown_ret = gst_element_set_state(pipeline_, GST_STATE_NULL);
+    GstState current_state = GST_STATE_NULL;
+    GstState pending_state = GST_STATE_VOID_PENDING;
+    GstStateChangeReturn wait_ret = gst_element_get_state(pipeline_, &current_state, &pending_state, 2 * GST_SECOND);
+
+    logger_.log_event(std::string("MetadataSession: startup reset state change return: ") + gst_element_state_change_return_get_name(shutdown_ret));
+    std::ostringstream shutdown_text;
+    shutdown_text << "MetadataSession: startup reset wait result: " << gst_element_state_change_return_get_name(wait_ret)
+                  << " | current=" << gst_element_state_get_name(current_state)
+                  << " | pending=" << gst_element_state_get_name(pending_state);
+    logger_.log_event(shutdown_text.str());
+
+    metadata_sample_count_ = 0;
+    missing_metadata_warned_ = false;
+    {
+        std::lock_guard<std::mutex> lock(state_.meta_mutex);
+        state_.current_objects.clear();
+        state_.has_metadata_update = false;
+    }
+    state_.last_parse_status_text = "No metadata parsed yet";
+
+    GstStateChangeReturn play_ret = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
+    logger_.log_event(std::string("MetadataSession: startup retry PLAYING request returned: ") + gst_element_state_change_return_get_name(play_ret));
+    if (play_ret == GST_STATE_CHANGE_FAILURE) {
+        logger_.log_event("MetadataSession: startup retry failed to change pipeline state to PLAYING");
+        return false;
+    }
+
+    stream_started_at_ = std::chrono::steady_clock::now();
+    return true;
 }
 
 void MetadataRtspSession::log_bus_message(GstMessage* msg) {
@@ -210,6 +268,19 @@ void MetadataRtspSession::on_src_pad_added(GstElement*, GstPad* new_pad, gpointe
             GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
             if (link_result == GST_PAD_LINK_OK) {
                 self->logger_.log_event(std::string("MetadataSession: linked metadata pad | caps=") + caps_text);
+            } else {
+                self->logger_.log_event(std::string("MetadataSession: failed to link metadata pad: ") + gst_pad_link_get_name(link_result));
+            }
+        }
+        gst_object_unref(sink_pad);
+    } else if (media_str == "video") {
+        GstPad* sink_pad = gst_element_get_static_pad(self->video_sink_, "sink");
+        if (!gst_pad_is_linked(sink_pad)) {
+            GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
+            if (link_result == GST_PAD_LINK_OK) {
+                self->logger_.log_event(std::string("MetadataSession: linked auxiliary video pad | caps=") + caps_text);
+            } else {
+                self->logger_.log_event(std::string("MetadataSession: failed to link auxiliary video pad: ") + gst_pad_link_get_name(link_result));
             }
         }
         gst_object_unref(sink_pad);
@@ -240,6 +311,11 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
     if (xml_start) {
         std::string xml_str(xml_start, reinterpret_cast<const char*>(map.data + map.size));
         self->logger_.log_raw_metadata(xml_str);
+        ++self->metadata_sample_count_;
+        if (self->metadata_sample_count_ == 1) {
+            self->logger_.log_event("MetadataSession: first metadata sample received");
+            self->missing_metadata_warned_ = true;
+        }
 
         if (self->config_.capture_fixture_candidates) {
             std::string saved_path;
@@ -263,8 +339,7 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
                                                   " | objects=" + std::to_string(parse_result.objects.size());
 
             std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
-            if (has_objects &&
-                (parse_result.status == ParseStatus::Success || parse_result.status == ParseStatus::UnknownPattern)) {
+            if (!parse_result.objects.empty()) {
                 self->state_.current_objects = std::move(parse_result.objects);
                 self->state_.last_metadata_update = std::chrono::steady_clock::now();
                 self->state_.has_metadata_update = true;
@@ -288,7 +363,6 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
     return GST_FLOW_OK;
 }
 
-
 gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, GstCaps* caps, gpointer user_data) {
     auto* self = static_cast<MetadataRtspSession*>(user_data);
     GstStructure* structure = gst_caps_get_structure(caps, 0);
@@ -309,5 +383,4 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     self->logger_.log_event(text.str());
     return select;
 }
-
 
