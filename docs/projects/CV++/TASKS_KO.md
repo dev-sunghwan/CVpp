@@ -1,10 +1,10 @@
 ﻿# CV++ 작업 계획
 
 ## 문서 정보
-- 버전: `v0.5`
-- 상태: `마일스톤 2 진행 중`
+- 버전: `v0.7`
+- 상태: `마일스톤 3 준비 완료`
 - 작성일: `2026-03-18`
-- 최종 수정일: `2026-03-19`
+- 최종 수정일: `2026-03-23`
 - 작성 주체: `Software Engineer Agent`
 
 ## 변경 이력
@@ -14,10 +14,12 @@
 | 2026-03-18 | v0.2 | 마일스톤 1 완료 및 초기 로그 경로 결정 반영 |
 | 2026-03-18 | v0.3 | parser transparency, parsed summary, fixture candidate capture를 포함한 마일스톤 2 착수 |
 | 2026-03-19 | v0.4 | `profile2`, `profile4` 고해상도 스트림 1차 검증 결과 반영 |
-| 2026-03-19 | v0.5 | `profile2` mixed pipeline 불안정과 video-only 기준선 확보를 반영하여 조사 재개 |
+| 2026-03-19 | v0.5 | 고해상도 조사 재개 및 mixed pipeline 불안정 반영 |
+| 2026-03-20 | v0.6 | 잘못된 profile별 metadata 결론을 정정하고 full-app orchestration 이슈로 초점 이동 |
+| 2026-03-23 | v0.7 | 기반 마일스톤을 닫고, 다음 마일스톤을 metadata evidence와 performance visibility 중심으로 재정의 |
 
 ## 요약
-이 계획은 승인된 PM 범위와 Tech Lead 아키텍처를 따른다. 순서는 의도적이다. 먼저 설정과 raw metadata 관측성을 확보하고, 그 다음 parser 신뢰성을 높이며, 마지막으로 최소 검증 UI를 정리한다.
+프로젝트는 초기 RTSP bring-up 단계를 넘어섰다. 현재 기준선은 video 수신, metadata 수집, 다중 객체 파싱, 다중 객체 overlay까지 가능하다. 다음 마일스톤은 사용자가 metadata evidence와 metadata performance를 직접 판단할 수 있게 만드는 데 집중해야 한다.
 
 ## 마일스톤 1: 최소 런타임 골격
 상태: 완료.
@@ -29,45 +31,47 @@
 - 정규화된 in-memory metadata 구조 정의
 - UI 재설계 없이도 빌드가 유지되는지 확인
 
-완료 결과:
-- 스트림 설정이 더 이상 하드코딩되지 않음
-- raw metadata 로그 파일 생성 가능
-- config 및 logging 실패가 콘솔과 로그에 드러남
-- 실행마다 session 기반 output 폴더 생성
-
 ## 마일스톤 2: Metadata Capture 및 Parse Transparency
-상태: 진행 중.
+상태: 완료.
 
-현재까지 구현:
+완료된 작업:
 - raw metadata를 파싱 전에 로그에 기록
 - parse status를 `success`, `unknown-pattern`, `no-objects`, `malformed-payload`로 분류
 - `parsed_summary.log`에 parsed summary 기록
 - `config.toml`로 실제 세션 fixture candidate 저장 가능
-- 현재 parse status를 화면 배너로 표시
 - 정상 종료 시 RTSP method를 기록하고 `PAUSE`, `TEARDOWN` 확인 가능
-- startup watchdog이 실패한 스트림 시작을 reset 후 재시도 가능
-- metadata appsink를 파이프라인에서 제외하는 true video-only 모드 지원
+- 카메라 동작 검증용 `metadata_probe` 추가
+- app metadata session이 선택한 auxiliary video track을 실제 소비하도록 수정
+- fragment된 metadata 처리 개선으로 live 세션에서 multi-object parsing 복구
+- live 실행에서 동시에 여러 객체 overlay가 다시 표시됨
 
-현재 런타임 기준선:
-- `profile4`는 안정적인 mixed-mode 고해상도 기준선
-- `profile2`는 mixed mode에서 아직 간헐적
-- `profile2`는 video-only mode에서 훨씬 안정적
+현재 확인된 결과:
+- `profile2`, `profile4` 모두 object-bearing metadata를 생성할 수 있음
+- 앱은 동시에 여러 객체를 파싱하고 표시할 수 있음
+- 최근 세션에서 `Car`, `Human`, `Bicycle`가 의미 있게 감지됨
+- 기존의 profile별 metadata 동작 차이 결론은 정정됨
 
-남은 작업:
-- 실제 Hanwha 세션에서 대표 fixture 세트 수집
-- 실제 metadata에서 unknown pattern 노출 확인
-- object overlay 로직에서 non-object event metadata 분리
-- 빠르게 움직이는 차량에 대한 overlay 품질 개선
-- `profile2`를 full mixed-mode 기준선으로 보기 전에 metadata 처리 구조 결정
+## 마일스톤 3: Metadata Evidence 및 Performance Visibility
+상태: 다음 목표.
+
+목표:
+아래 두 질문에 런타임에서 직접 답할 수 있게 만든다.
+1. 지금 보고 있는 객체에 대해 카메라가 실제 metadata를 보냈는가?
+2. 세션 전체 기준으로 카메라 metadata 성능은 어느 정도인가?
+
+작업:
+- raw metadata seen, parsed object count, overlay object count, metadata age를 보여주는 evidence banner 또는 panel 추가
+- 객체 타입별 detection 수와 unique object ID 수를 보여주는 session metrics 추가
+- 반복 detection event와 고유 tracked object를 카메라의 `ObjectId` 기준으로 구분
+- malformed payload 비율과 parser health를 사람이 해석 가능한 형태로 노출
+- overlay가 없을 때 그 원인이 missing metadata인지, parse loss인지, display-state loss인지 구분 가능하게 만들기
 
 완료 기준:
-- 같은 세션 기준으로 raw와 parsed 결과 비교 가능
-- parser failure가 더 이상 조용히 묻히지 않음
-- 실제 Hanwha metadata fixture 확보
-- live 검증에 쓸 수 있을 만큼 object overlay 신뢰성 확보
-- 고해상도 mixed-mode 기준선 전략이 명확해짐
+- 사용자가 로그를 직접 열지 않아도 evidence 상태를 알 수 있음
+- 한 세션에서 반복 detection 수와 고유 객체 수를 함께 비교 가능함
+- overlay 부재가 카메라 미전송인지 앱 손실인지 구분 가능함
 
-## 마일스톤 3: Overlay State 분리
+## 마일스톤 4: Overlay State 분리
 목표: freshness와 stale-object 동작을 더 신뢰 가능하고 유지보수 가능하게 만든다.
 
 작업:
@@ -75,11 +79,7 @@
 - freshness timeout과 stale-clear 규칙 중앙화
 - 수집한 샘플 기준으로 객체 소멸 처리 검증
 
-완료 기준:
-- overlay update가 main entry flow 밖에서 처리됨
-- stale detection이 일관되게 정리됨
-
-## 마일스톤 4: 최소 검증 화면
+## 마일스톤 5: 최소 검증 화면
 목표: 제품 UI로 확장하지 않고, 한 화면 검증 기능을 제공한다.
 
 작업:
@@ -88,10 +88,7 @@
 - 최근 raw metadata 라인 또는 raw metadata 패널 표시
 - 연결 상태 및 재연결 상태 표시
 
-완료 기준:
-- 사용자가 한 화면에서 영상, overlay, parsed output, raw evidence를 비교 가능
-
-## 마일스톤 5: 기본 세션 안정성
+## 마일스톤 6: 기본 세션 안정성
 목표: 일반적인 카메라 불안정 상황에서도 v0.1이 사용 가능하도록 만든다.
 
 작업:
@@ -99,33 +96,18 @@
 - 재연결 시도 및 세션 상태 변화 로그 기록
 - 재연결 상태가 검증 화면에 보이도록 연결
 
-완료 기준:
-- 일시적 스트림 끊김이 보이고 앱이 자동 복구를 시도함
-
 ## 핵심 우려
 - 관측성이 확보되기 전에 큰 리팩터링을 하지 않는다.
 - raw metadata 근거가 신뢰되기 전에는 polished UI를 만들지 않는다.
 - 각 마일스톤은 독립적으로 실행 가능해야 한다.
+- full app 해석 전에 `metadata_probe`를 control experiment로 사용한다.
 
 ## 반영된 결정
 - 기본 로그 경로: `output/session-YYYYMMDD-HHMMSS/` 형태의 세션별 output 폴더
 - v0.1 raw metadata 로그 형식: 세션당 단일 plain file
-- `profile4`를 현재 mixed-mode 고해상도 기준선으로 유지
+- `metadata_probe`는 camera-behavior validation의 control experiment이다
+- 다음 마일스톤은 visual polish보다 metadata evidence와 performance를 우선한다
 
-## 권고
-마일스톤 2는 live parser transparency, 실제 metadata 샘플, object overlay 신뢰성 개선에 집중한다. 아직 reconnect나 화면 레이아웃 확장으로 범위를 넓히지 않는다.
-
-## 병행 조사
-고해상도 조사는 아직 완전히 닫히지 않았다.
-
-참고 문서:
+## 참고 문서
 - `docs/projects/CV++/HIGH_RESOLUTION_PROFILE_INVESTIGATION.md`
-
-## 열린 질문
-- 실제 fixture capture는 개발 중 기본값으로 둘지, 계속 opt-in으로 둘지?
-- 실제 Hanwha 세션에서 최소 fixture 세트를 무엇으로 볼지?
-- 빠르게 움직이는 차량에 대해 freshness 또는 hold 규칙을 어떻게 둘지?
-- `profile2` metadata를 video와 분리된 pipeline으로 처리할지?
-
-## SungHwan 승인 요청
-`profile4`를 mixed-mode 기준선으로 유지하면서, Tech Lead가 `profile2`의 split video-and-metadata 전략을 검토하는 방향으로 마일스톤 2를 계속 진행한다.
+- `docs/projects/CV++/MILESTONE_REVIEW_KO.md`

@@ -1,7 +1,49 @@
 ﻿#include "metadata_parser.h"
 
+#include <algorithm>
+#include <cctype>
 #include <regex>
 #include <sstream>
+
+namespace {
+std::string normalize_type_label(const std::string& raw) {
+    if (raw.empty()) {
+        return "Unknown";
+    }
+
+    std::string letters_only;
+    letters_only.reserve(raw.size());
+    for (unsigned char ch : raw) {
+        if (std::isalpha(ch)) {
+            letters_only.push_back(static_cast<char>(std::tolower(ch)));
+        }
+    }
+
+    if (letters_only.find("human") != std::string::npos || letters_only.rfind("hum", 0) == 0) {
+        return "Human";
+    }
+    if (letters_only.find("bicycle") != std::string::npos || letters_only.rfind("bic", 0) == 0) {
+        return "Bicycle";
+    }
+    if (letters_only.find("car") != std::string::npos) {
+        return "Car";
+    }
+    if (letters_only.find("head") != std::string::npos) {
+        return "Head";
+    }
+    if (letters_only.find("vehicle") != std::string::npos || letters_only.find("vehical") != std::string::npos || letters_only.rfind("veh", 0) == 0) {
+        return "Vehicle";
+    }
+
+    if (!letters_only.empty()) {
+        std::string cleaned = letters_only;
+        cleaned[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(cleaned[0])));
+        return cleaned;
+    }
+
+    return "Unknown";
+}
+}
 
 const char* parse_status_label(ParseStatus status) {
     switch (status) {
@@ -69,14 +111,15 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
     size_t pos = 0;
     while ((pos = xml.find(start_tag, pos)) != std::string::npos) {
         size_t end = xml.find(end_tag, pos);
+        bool block_is_partial = false;
         if (end == std::string::npos) {
-            result.status = ParseStatus::MalformedPayload;
-            result.message = "Object block did not close cleanly";
-            return result;
+            end = xml.size();
+            block_is_partial = true;
+        } else {
+            end += end_tag.size();
         }
 
         found_object_block = true;
-        end += end_tag.size();
         std::string block = xml.substr(pos, end - pos);
         pos = end;
 
@@ -98,18 +141,18 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
         std::smatch detail_m;
         if (std::regex_search(block, detail_m, vehicle_re) || std::regex_search(block, detail_m, human_re)) {
             obj.likelihood = std::stof(detail_m[1].str());
-            obj.type = detail_m[2].str();
+            obj.type = normalize_type_label(detail_m[2].str());
             has_any_detail = true;
         } else {
             std::smatch class_m;
             if (std::regex_search(block, class_m, class_type_re)) {
                 obj.likelihood = std::stof(class_m[1].str());
-                obj.type = class_m[2].str();
+                obj.type = normalize_type_label(class_m[2].str());
                 has_any_detail = true;
             } else {
                 std::smatch candidate_m;
                 if (std::regex_search(block, candidate_m, candidate_re)) {
-                    obj.type = candidate_m[1].str();
+                    obj.type = normalize_type_label(candidate_m[1].str());
                     obj.likelihood = std::stof(candidate_m[2].str());
                     has_any_detail = true;
                 }
@@ -120,7 +163,16 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
             found_unknown_pattern = true;
         }
 
+        if (block_is_partial) {
+            result.status = ParseStatus::MalformedPayload;
+            result.message = "Object block did not close cleanly";
+        }
+
         result.objects.push_back(obj);
+
+        if (block_is_partial) {
+            break;
+        }
     }
 
     if (!found_object_block) {
@@ -135,7 +187,9 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
         return result;
     }
 
-    result.status = found_unknown_pattern ? ParseStatus::UnknownPattern : ParseStatus::Success;
-    result.message = found_unknown_pattern ? "Objects parsed but some class patterns were unknown" : "Objects parsed successfully";
+    if (result.status != ParseStatus::MalformedPayload) {
+        result.status = found_unknown_pattern ? ParseStatus::UnknownPattern : ParseStatus::Success;
+        result.message = found_unknown_pattern ? "Objects parsed but some class patterns were unknown" : "Objects parsed successfully";
+    }
     return result;
 }

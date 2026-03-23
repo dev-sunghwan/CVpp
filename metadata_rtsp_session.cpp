@@ -300,16 +300,7 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
     GstMapInfo map;
     gst_buffer_map(buffer, &map, GST_MAP_READ);
 
-    const char* xml_start = nullptr;
-    for (gsize i = 0; i + 4 < map.size; ++i) {
-        if (map.data[i] == '<' && map.data[i + 1] == '?' && map.data[i + 2] == 'x') {
-            xml_start = reinterpret_cast<const char*>(map.data + i);
-            break;
-        }
-    }
-
-    if (xml_start) {
-        std::string xml_str(xml_start, reinterpret_cast<const char*>(map.data + map.size));
+    auto process_xml = [&](const std::string& xml_str, bool from_pending) {
         self->logger_.log_raw_metadata(xml_str);
         ++self->metadata_sample_count_;
         if (self->metadata_sample_count_ == 1) {
@@ -334,6 +325,20 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
         self->logger_.log_parsed_summary(summary);
         self->logger_.log_event(std::string("MetadataSession: parse result: ") + summary);
 
+        if (parse_result.status == ParseStatus::MalformedPayload) {
+            self->pending_xml_fragment_ = xml_str;
+            if (from_pending) {
+                self->logger_.log_event("MetadataSession: pending XML fragment still incomplete after continuation chunk");
+            } else {
+                self->logger_.log_event("MetadataSession: stored malformed XML fragment for continuation");
+            }
+        } else if (from_pending) {
+            self->pending_xml_fragment_.clear();
+            self->logger_.log_event("MetadataSession: completed pending XML fragment after continuation chunk");
+        } else {
+            self->pending_xml_fragment_.clear();
+        }
+
         if (has_video_analytics) {
             self->state_.last_parse_status_text = std::string("Parse: ") + parse_status_label(parse_result.status) +
                                                   " | objects=" + std::to_string(parse_result.objects.size());
@@ -352,6 +357,22 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
             self->state_.last_parse_status_text = "Parse: event-only | overlay unchanged";
             self->logger_.log_event("MetadataSession: event-only metadata ignored for overlay state");
         }
+    };
+
+    const char* xml_start = nullptr;
+    for (gsize i = 0; i + 4 < map.size; ++i) {
+        if (map.data[i] == '<' && map.data[i + 1] == '?' && map.data[i + 2] == 'x') {
+            xml_start = reinterpret_cast<const char*>(map.data + i);
+            break;
+        }
+    }
+
+    if (xml_start) {
+        std::string xml_str(xml_start, reinterpret_cast<const char*>(map.data + map.size));
+        process_xml(xml_str, false);
+    } else if (!self->pending_xml_fragment_.empty()) {
+        self->pending_xml_fragment_.append(reinterpret_cast<const char*>(map.data), reinterpret_cast<const char*>(map.data + map.size));
+        process_xml(self->pending_xml_fragment_, true);
     } else {
         self->logger_.log_event("MetadataSession: metadata payload received without XML start marker");
         self->logger_.log_parsed_summary("status=malformed-payload message=\"XML start marker not found\" objects=0");
@@ -383,4 +404,5 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     self->logger_.log_event(text.str());
     return select;
 }
+
 

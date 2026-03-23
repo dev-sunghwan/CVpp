@@ -22,6 +22,7 @@
 
 namespace {
 std::atomic<bool> g_shutdown_requested = false;
+constexpr int kOverlayHoldMs = 1500;
 
 #ifdef _WIN32
 BOOL WINAPI console_ctrl_handler(DWORD ctrl_type) {
@@ -190,7 +191,7 @@ int main(int argc, char* argv[]) {
                 const auto fresh_now = std::chrono::steady_clock::now();
                 const bool metadata_is_fresh =
                     shared_state.has_metadata_update &&
-                    (std::chrono::duration_cast<std::chrono::milliseconds>(fresh_now - shared_state.last_metadata_update).count() <= 500);
+                    (std::chrono::duration_cast<std::chrono::milliseconds>(fresh_now - shared_state.last_metadata_update).count() <= kOverlayHoldMs);
 
                 if (metadata_is_fresh) {
                     overlay_objects = shared_state.current_objects;
@@ -237,3 +238,4 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO] Done." << std::endl;
     return 0;
 }
+

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <chrono>
+#include <string>
 
 #include <gst/gst.h>
 #include <gst/rtsp/rtsp.h>
@@ -41,4 +42,5 @@ private:
     int startup_retry_count_ = 0;
     const int max_startup_retries_ = 2;
     std::chrono::steady_clock::time_point stream_started_at_{};
+    std::string pending_xml_fragment_;
 };

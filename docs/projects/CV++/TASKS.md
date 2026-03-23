@@ -1,10 +1,10 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v0.6`
-- Status: `Milestone 2 in progress`
+- Version: `v0.7`
+- Status: `Milestone 3 ready`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-20`
+- Last Updated: `2026-03-23`
 - Owner: `Software Engineer Agent`
 
 ## Change History
@@ -16,9 +16,10 @@
 | 2026-03-19 | v0.4 | Closed the initial high-resolution stream investigation for `profile2` and `profile4`. |
 | 2026-03-19 | v0.5 | Reopened the high-resolution investigation after intermittent startup failures and metadata-branch concerns. |
 | 2026-03-20 | v0.6 | Corrected the earlier profile-specific conclusion and shifted focus back to full-app orchestration. |
+| 2026-03-23 | v0.7 | Closed the foundation milestone and prepared the next milestone around metadata evidence and performance visibility. |
 
 ## Summary
-This plan follows the approved PM scope and Tech Lead architecture. The order remains the same: make configuration and raw metadata observability work first, then improve parser trust, then make the full verification runtime trustworthy enough for live use.
+The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The next milestone should make metadata evidence and metadata performance directly visible to the user.
 
 ## Milestone 1: Minimal Runtime Skeleton
 Status: completed.
@@ -31,40 +32,46 @@ Completed work:
 - verified the project still builds with no UI redesign
 
 ## Milestone 2: Metadata Capture and Parse Transparency
-Status: in progress.
+Status: completed.
 
-Implemented so far:
+Completed work:
 - raw metadata is logged before parsing
 - parse status is classified as success, unknown-pattern, no-objects, or malformed-payload
 - parsed summaries are written to `parsed_summary.log`
 - optional real-session fixture candidate capture is supported through `config.toml`
-- the current parse status is shown as a minimal on-screen banner
 - normal shutdown logs RTSP methods and confirms `PAUSE` plus `TEARDOWN`
-- startup watchdog logic exists for failed starts
-- a minimal `metadata_probe` control tool now exists
-- the full app metadata session now consumes the selected auxiliary video track instead of selecting and dropping it
+- `metadata_probe` was added as a control experiment for camera behavior
+- the app metadata session now consumes the selected auxiliary video track instead of selecting and dropping it
+- fragmented metadata handling was improved enough to recover multi-object parsing in live sessions
+- live runs now show simultaneous multi-object overlays again
 
-Current runtime reality:
-- both `profile2` and `profile4` can produce object-bearing metadata in clean probe runs
-- the earlier profile-specific metadata conclusion was wrong
-- the current bottleneck is full-app orchestration and overlay trust, not a confirmed camera-profile rule
-- the full app now receives metadata again after aligning one key path with the control probe
+Current verified outcome:
+- both `profile2` and `profile4` can produce object-bearing metadata
+- the app can parse and display multiple simultaneous objects
+- recent sessions contain meaningful `Car`, `Human`, and `Bicycle` detections
+- the earlier profile-specific metadata conclusion has been corrected
 
-Remaining work:
-- verify overlay behavior in the full app against the corrected metadata path
-- reduce object-loss caused by fragmented or malformed metadata payloads
-- collect the first representative fixture set from a real Hanwha session
-- verify that unknown pattern cases are surfaced as expected on real metadata
-- improve overlay behavior for fast-moving vehicles
+## Milestone 3: Metadata Evidence and Performance Visibility
+Status: next.
+
+Goal:
+Make the runtime answer two questions directly:
+1. Did the camera send metadata for the object currently in view?
+2. How good is the camera's metadata performance over a session?
+
+Tasks:
+- add an evidence banner or panel showing raw metadata seen, parsed object count, overlay object count, and metadata age
+- add session metrics for detections by type and unique object IDs by type
+- distinguish repeated detection events from unique tracked objects using camera-reported `ObjectId`
+- surface malformed payload rate and parser health in a human-checkable way
+- ensure the user can tell whether missing overlay means missing metadata, parse loss, or display-state loss
 
 Done when:
-- raw and parsed outputs can be compared for the same session
-- parser failures no longer fail silently
-- sample fixtures exist from real Hanwha metadata
-- the full app behaves consistently with the control probe
-- object overlay behavior is trustworthy enough for live verification
+- the app exposes evidence state without requiring manual log inspection
+- the user can compare repeated detections and unique object counts in one session
+- the app makes it clear whether an object was not sent by the camera or simply not shown on screen
 
-## Milestone 3: Overlay State Isolation
+## Milestone 4: Overlay State Isolation
 Goal: make freshness and stale-object behavior easier to trust and maintain.
 
 Tasks:
@@ -72,7 +79,7 @@ Tasks:
 - centralize freshness timeout and stale-clear rules
 - verify disappearing objects are removed correctly against captured samples
 
-## Milestone 4: Minimal Verification View
+## Milestone 5: Minimal Verification View
 Goal: provide one-screen operator verification without expanding scope into product UI.
 
 Tasks:
@@ -81,7 +88,7 @@ Tasks:
 - show recent raw metadata lines or a raw metadata panel
 - show connection and reconnect status
 
-## Milestone 5: Basic Session Robustness
+## Milestone 6: Basic Session Robustness
 Goal: make v0.1 usable during normal camera instability.
 
 Tasks:
@@ -99,15 +106,8 @@ Tasks:
 - default log path strategy: session-based runtime output folders under `output/session-YYYYMMDD-HHMMSS/`
 - raw metadata log format for v0.1: single plain file per session
 - `metadata_probe` is the control experiment for camera-behavior validation
+- the next milestone should prioritize metadata evidence and metadata performance over visual polish
 
-## Recommendation
-Keep Milestone 2 focused on making the full app match the now-correct probe behavior before adding more product behavior. Do not expand into reconnect or layout work yet.
-
-## Parallel Investigation
-Reference:
+## Reference
 - `docs/projects/CV++/HIGH_RESOLUTION_PROFILE_INVESTIGATION.md`
-
-## Open Questions
-- What is the smallest acceptable first fixture set from a real Hanwha camera session?
-- What is the right freshness or hold behavior for fast-moving vehicles?
-- Why does the full app still diverge from `metadata_probe` under some runs even after the corrected camera conclusion?
+- `docs/projects/CV++/MILESTONE_REVIEW.md`
