@@ -1,10 +1,10 @@
 ﻿# CV++ 아키텍처
 
 ## 문서 정보
-- 버전: `v0.4`
-- 상태: `분리 구조 방향으로 승인`
+- 버전: `v0.5`
+- 상태: `분리 구조와 Qt 전환 방향으로 승인`
 - 작성일: `2026-03-18`
-- 최종 수정일: `2026-03-19`
+- 최종 수정일: `2026-03-23`
 - 작성 주체: `Tech Lead Agent`
 
 ## 변경 이력
@@ -14,6 +14,7 @@
 | 2026-03-18 | v0.2 | 초기 아키텍처 선택지 중 logging, 재연결, config 형식을 확정 |
 | 2026-03-18 | v0.3 | 현재 아키텍처를 승인 상태로 반영 |
 | 2026-03-19 | v0.4 | `profile2` mixed pipeline 불안정 결과를 반영해 video와 metadata 분리 방향으로 업데이트 |
+| 2026-03-23 | v0.5 | 중기 UI/저장 방향으로 Qt 데스크톱 UI와 SQLite 기반 session review를 추가 |
 
 ## 요약
 v0.1에서 아키텍처는 여전히 C++ 단일 프로세스 데스크톱 애플리케이션으로 유지하는 것이 적절하다. 다만 런타임 전략은 이제 분리 구조를 우선해야 한다. 즉, 비디오는 안정적인 기준선으로 유지하고, metadata는 비디오 경로를 불안정하게 만들지 않는 별도 경로로 다루어야 한다.
@@ -66,10 +67,36 @@ Config
 ## 실용적 기술 선택
 - 언어: C++
 - 스트리밍: `rtspsrc`와 `before-send`를 포함한 GStreamer
-- 프레임 및 overlay 처리: OpenCV
+- 프레임 및 overlay 처리: 현재 기준선은 OpenCV, 다음 UI 계층의 우선 방향은 Qt
 - 설정 형식: TOML
-- v0.1 저장 방식: 우선 plain file 로그, raw history 필요성이 즉시 높아질 때만 SQLite 검토
+- v0.1 저장 방식: 우선 plain file 로그, 다음 현실적 저장 계층은 SQLite
 - v0.1 복구 방식: startup retry + 상태 표시 + 세션 로그
+
+## UI 플랫폼 방향
+현재 OpenCV 기반 verification view는 과도기적 인터페이스로는 허용 가능하지만, 장기 UI 플랫폼으로 보기는 어렵다.
+
+합의된 방향:
+- 현재 C++ runtime, GStreamer session, parser, logging core는 유지한다
+- OpenCV verification view는 임시 운영자 콘솔로 본다
+- UI 품질과 review workflow를 한 단계 끌어올릴 다음 방향은 Qt 데스크톱 애플리케이션으로 잡는다
+
+Qt를 우선 방향으로 보는 이유:
+- 제품은 여전히 로컬 데스크톱 검증 도구이다
+- 연결 폼, evidence panel, metrics table, session review workflow가 필요하다
+- 현재 C++ core를 브라우저 기반 전환보다 더 직접적으로 재사용할 수 있다
+- 글꼴, 레이아웃, 운영자 상호작용 측면에서 OpenCV보다 훨씬 적합하다
+
+브라우저 기반 전환은 아직 미룬다. 그 방향은 더 큰 구조 변화, 즉 service 경계, web transport, multi-user workflow까지 전제하기 때문이다.
+
+## 저장 방향
+현재 evidence 기준선은 plain log로 유지하되, 다음 현실적인 persistence 계층은 SQLite로 잡는다.
+
+SQLite가 현재 단계에 맞는 이유:
+- 인프라 부담 없이 로컬 session review와 object-level history를 지원한다
+- 이후 Qt 데스크톱 UI와 잘 맞는다
+- session summary, parsed object, unique object metrics 저장에 충분하다
+
+서버형 DB는 프로젝트가 명확히 multi-camera 또는 multi-user workflow로 확장될 때 다시 검토한다.
 
 ## Mixed Pipeline 정책
 mixed pipeline은 선택적 경로로 두고, 기반 구조로 보지 않는다.
@@ -109,12 +136,14 @@ mixed pipeline은 선택적 경로로 두고, 기반 구조로 보지 않는다.
 - metadata 동작이 충분히 안정되기 전에는 동기화 로직을 과도하게 키우지 않는다.
 
 ## 권고
-분리 구조 방향을 구현 기준선으로 승인하는 것이 맞다.
+runtime 기준선은 분리 구조로 유지하고, 중기 제품 진화 방향은 Qt + SQLite로 승인하는 것이 맞다.
 
 실무적으로는 다음 의미를 가진다.
-- `profile4`는 현재 mixed-mode 검증 기준선으로 유지
-- `profile2`는 아직 reliable mixed-mode baseline으로 보지 않음
-- 앞으로 구현은 앱 내부에서 stable video transport와 metadata transport를 가능한 한 분리하는 쪽으로 진행
+- runtime 안정성 작업은 현재 C++ / GStreamer core 안에서 계속 진행한다
+- OpenCV UI 작업은 전략이 아니라 전술 수준으로 본다
+- 앞으로 구현은 앱 내부에서 stable video transport와 metadata transport를 가능한 한 분리하는 쪽으로 진행한다
+- 다음 큰 UI 투자는 Qt 데스크톱 계층으로 간다
+- 다음 큰 저장 투자는 SQLite 기반 session review로 간다
 
 ## 열린 질문
 - `profile2` metadata를 완전히 별도 RTSP 세션으로 둘지, 같은 프로세스 안의 별도 관리 경로로 둘지?

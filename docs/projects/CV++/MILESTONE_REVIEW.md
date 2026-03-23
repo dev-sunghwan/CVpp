@@ -58,3 +58,9 @@ That means the next milestone should add:
 
 ## Recommendation
 Do not pivot away from the current architecture. Continue from the current app and control probe baseline, and focus the next milestone on evidence visibility and metadata performance reporting.
+
+## Learning Outcome
+This milestone also established a useful learning baseline for SungHwan:
+- how a C++ desktop runtime is split into config, session, parser, state, and logging responsibilities
+- how to debug a live system by separating control experiments from the full app
+- how camera behavior, parser behavior, and UI behavior must be distinguished before drawing conclusions

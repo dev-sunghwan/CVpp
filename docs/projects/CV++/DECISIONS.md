@@ -1,10 +1,10 @@
 ﻿# CV++ Decisions
 
 ## Document Control
-- Version: `v0.3`
+- Version: `v0.4`
 - Status: `Approved`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-18`
+- Last Updated: `2026-03-23`
 - Owner: `PM Agent`
 
 ## Change History
@@ -13,6 +13,7 @@
 | 2026-03-18 | v0.1 | Initial PM decision document defining user purpose, MVP scope, out of scope, and success criteria. |
 | 2026-03-18 | v0.2 | Added PM decision for verification UI and mitigation direction for key concerns. |
 | 2026-03-18 | v0.3 | Marked the current product direction as approved. |
+| 2026-03-23 | v0.4 | Added product decision for verification-focused desktop UI evolution and practical storage direction. |
 
 ## Summary
 CV++ should be treated as a practical metadata-observability product first, not a general AI video platform yet. The immediate user value is letting SungHwan verify what a Hanwha RTSP stream is sending, whether custom headers work as intended, and whether parsed metadata is trustworthy enough to support later comparison with external CV models.
@@ -25,6 +26,8 @@ The product should help the user:
 - inject and validate custom RTSP headers
 - inspect raw ONVIF-style metadata alongside video
 - confirm that parsed objects and overlays reflect the real stream accurately
+
+The project should also help the user grow practical C++ skills through real runtime work. That means the implementation should stay readable enough for SungHwan to learn from modules, ownership boundaries, and debugging flow rather than only consume the final tool.
 
 ## MVP Scope
 The MVP includes:
@@ -67,6 +70,33 @@ The preferred MVP interface is a simple operator-facing desktop screen that show
 - access to raw metadata capture or recent raw metadata lines
 
 This is the PM decision: choose the UI that reduces verification time and ambiguity, not the UI that looks most complete. If a minimal desktop window can present video, parsed results, and raw metadata evidence together, that is sufficient for v0.
+
+## UI Platform Direction Decision
+The project has now outgrown an overlay-only OpenCV presentation. The product still needs a desktop verification workflow, but the next UI direction should favor explicit evidence panels, forms, and metrics over temporary on-frame OSD.
+
+Decision:
+- keep the current C++ and GStreamer runtime core
+- treat the current OpenCV view as a temporary verification UI
+- move the medium-term UI direction toward a Qt desktop application
+- do not switch to a browser-first application yet
+
+Reasoning:
+- the product is still a local operator verification tool, not a multi-user web platform
+- the current needs now include connection setup, metrics panels, recent metadata inspection, and later database-backed review
+- Qt is a more practical next step for those needs than continuing to grow an OpenCV-only UI
+
+## Storage Direction Decision
+The product now needs to distinguish repeated detections from session-level metadata performance.
+
+Decision:
+- keep plain text logs as the immediate source of truth
+- adopt SQLite as the next realistic storage layer when session metrics and review features expand
+- defer server-hosted databases and cloud architecture until the product clearly needs multi-user or multi-camera workflows
+
+Reasoning:
+- SQLite is enough for local session review, metrics, and object-level history
+- it keeps setup simple for a single operator workflow
+- it aligns well with a future Qt desktop UI
 
 ## Key Concerns
 - Regex-based metadata parsing may remain brittle until replaced or constrained more clearly.

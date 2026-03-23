@@ -1,10 +1,10 @@
 ﻿# CV++ Architecture
 
 ## Document Control
-- Version: `v0.4`
-- Status: `Approved with split-pipeline direction`
+- Version: `v0.5`
+- Status: `Approved with split-pipeline and Qt transition direction`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-19`
+- Last Updated: `2026-03-23`
 - Owner: `Tech Lead Agent`
 
 ## Change History
@@ -14,6 +14,7 @@
 | 2026-03-18 | v0.2 | Resolved initial architecture choices for logging, reconnect behavior, and config format. |
 | 2026-03-18 | v0.3 | Marked the current architecture as approved. |
 | 2026-03-19 | v0.4 | Updated the architecture to prefer split video and metadata handling after profile2 mixed-pipeline instability findings. |
+| 2026-03-23 | v0.5 | Added the agreed medium-term UI and storage transition direction: Qt desktop UI plus SQLite-backed session review. |
 
 ## Summary
 For v0.1, the architecture should remain a single-process desktop application in C++ using GStreamer and OpenCV. However, the runtime strategy should now prefer a split structure: keep video playback as the stable baseline, and handle metadata in a separate path that cannot destabilize the video path.
@@ -66,10 +67,36 @@ That means a mixed graph is still acceptable as an experiment path, but it is no
 ## Practical Technology Choices
 - Language: C++
 - Streaming: GStreamer with `rtspsrc` and `before-send`
-- Frame and overlay handling: OpenCV
+- Frame and overlay handling: OpenCV for the current baseline, with Qt as the preferred next UI layer
 - Config format: TOML
-- Persistence for v0.1: plain file logging first; SQLite only if raw history becomes immediately necessary
+- Persistence for v0.1: plain file logging first; SQLite is the preferred next storage layer for session metrics and review
 - Connection recovery for v0.1: simple startup retry plus visible status and session logs
+
+## UI Platform Direction
+The current OpenCV-based verification view is acceptable as a transitional interface, but it should not be treated as the long-term UI platform.
+
+Agreed direction:
+- keep the current C++ runtime, GStreamer sessions, parser, and logging core
+- treat the OpenCV verification view as a temporary operator console
+- evolve the presentation layer toward a Qt desktop application when the next level of UI quality and review workflow is needed
+
+Why Qt is the preferred next step:
+- the product is still local and desktop-oriented
+- it needs forms, panels, metrics tables, and session review workflows
+- it can reuse the current C++ core more directly than a browser-first rewrite
+- it is a better fit than OpenCV for readable text, layout, and operator interaction
+
+Browser-first direction remains deferred because it would imply a much larger architectural change: service boundaries, web transport, and multi-user workflow assumptions that the product does not yet require.
+
+## Storage Direction
+Plain logs remain the current evidence baseline, but the next realistic persistence layer should be SQLite.
+
+Why SQLite fits the current product stage:
+- it supports local session review and object-level history without infrastructure overhead
+- it works well with a future Qt desktop application
+- it is enough for storing session summaries, parsed objects, and unique object metrics
+
+Server-hosted databases should be revisited only when the project clearly moves into multi-camera or multi-user workflows.
 
 ## Mixed Pipeline Policy
 Treat the mixed pipeline as optional, not foundational.
@@ -109,12 +136,14 @@ The next implementation steps should be:
 - Do not overbuild synchronization logic before the metadata behavior is stable enough to justify it.
 
 ## Recommendation
-Approve the split direction as the implementation baseline.
+Approve the split direction as the runtime baseline and Qt plus SQLite as the medium-term product evolution path.
 
 In practical terms:
-- `profile4` remains the current mixed-mode validation baseline
-- `profile2` should not be treated as a reliable mixed-mode baseline yet
+- runtime stability work should continue inside the current C++ and GStreamer core
+- OpenCV UI work should remain tactical, not strategic
 - future implementation should separate stable video transport from metadata transport as much as possible inside the app
+- the next substantial UI investment should go into a Qt desktop layer
+- the next substantial storage investment should go into SQLite-backed session review
 
 ## Open Questions
 - Should `profile2` metadata use a fully separate RTSP session, or a separately managed branch within the same process?

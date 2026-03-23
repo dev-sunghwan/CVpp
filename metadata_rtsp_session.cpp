@@ -303,6 +303,11 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
     auto process_xml = [&](const std::string& xml_str, bool from_pending) {
         self->logger_.log_raw_metadata(xml_str);
         ++self->metadata_sample_count_;
+        {
+            std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
+            ++self->state_.total_raw_metadata_samples;
+            self->state_.last_raw_metadata_seen = std::chrono::steady_clock::now();
+        }
         if (self->metadata_sample_count_ == 1) {
             self->logger_.log_event("MetadataSession: first metadata sample received");
             self->missing_metadata_warned_ = true;
@@ -324,6 +329,28 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
                               summarize_objects(parse_result.objects);
         self->logger_.log_parsed_summary(summary);
         self->logger_.log_event(std::string("MetadataSession: parse result: ") + summary);
+        {
+            std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
+            ++self->state_.total_parsed_payloads;
+            self->state_.last_parsed_object_count = static_cast<int>(parse_result.objects.size());
+            self->state_.recent_parsed_summaries.push_back(summary);
+            if (self->state_.recent_parsed_summaries.size() > 8) {
+                self->state_.recent_parsed_summaries.erase(self->state_.recent_parsed_summaries.begin());
+            }
+
+            if (parse_result.status == ParseStatus::MalformedPayload) {
+                ++self->state_.total_malformed_payloads;
+            }
+            if (!has_video_analytics) {
+                ++self->state_.total_event_only_payloads;
+            }
+
+            for (const auto& object : parse_result.objects) {
+                ++self->state_.total_detection_events;
+                ++self->state_.detections_by_type[object.type];
+                self->state_.unique_ids_by_type[object.type].insert(object.id);
+            }
+        }
 
         if (parse_result.status == ParseStatus::MalformedPayload) {
             self->pending_xml_fragment_ = xml_str;
@@ -376,6 +403,18 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
     } else {
         self->logger_.log_event("MetadataSession: metadata payload received without XML start marker");
         self->logger_.log_parsed_summary("status=malformed-payload message=\"XML start marker not found\" objects=0");
+        {
+            std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
+            ++self->state_.total_raw_metadata_samples;
+            ++self->state_.total_parsed_payloads;
+            ++self->state_.total_malformed_payloads;
+            self->state_.last_raw_metadata_seen = std::chrono::steady_clock::now();
+            self->state_.last_parsed_object_count = 0;
+            self->state_.recent_parsed_summaries.push_back("status=malformed-payload message=\"XML start marker not found\" objects=0");
+            if (self->state_.recent_parsed_summaries.size() > 8) {
+                self->state_.recent_parsed_summaries.erase(self->state_.recent_parsed_summaries.begin());
+            }
+        }
         self->state_.last_parse_status_text = "Parse: malformed-payload | objects=0";
     }
 
