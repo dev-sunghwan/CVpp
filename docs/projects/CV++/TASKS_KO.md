@@ -1,10 +1,10 @@
 ﻿# CV++ 작업 계획
 
 ## 문서 정보
-- 버전: `v0.8`
-- 상태: `마일스톤 3 진행 중, Qt 전환 계획 추가`
+- 버전: `v0.9`
+- 상태: `마일스톤 3 첫 vertical slice 완료, Qt 전환 진행 중`
 - 작성일: `2026-03-18`
-- 최종 수정일: `2026-03-23`
+- 최종 수정일: `2026-03-24`
 - 작성 주체: `Software Engineer Agent`
 
 ## 변경 이력
@@ -18,6 +18,7 @@
 | 2026-03-20 | v0.6 | 잘못된 profile별 metadata 결론을 정정하고 full-app orchestration 이슈로 초점 이동 |
 | 2026-03-23 | v0.7 | 기반 마일스톤을 닫고, 다음 마일스톤을 metadata evidence와 performance visibility 중심으로 재정의 |
 | 2026-03-23 | v0.8 | 현재 마일스톤을 유지한 채 Qt + SQLite 전환 트랙을 추가 |
+| 2026-03-24 | v0.9 | 첫 live Qt verification shell slice를 완료하고, 다음 단계를 Qt polish와 SQLite 준비로 좁힘 |
 
 ## 요약
 프로젝트는 초기 RTSP bring-up 단계를 넘어섰다. 현재 기준선은 video 수신, metadata 수집, 다중 객체 파싱, 다중 객체 overlay까지 가능하다. 다음 마일스톤은 사용자가 metadata evidence와 metadata performance를 직접 판단할 수 있게 만드는 데 집중해야 한다.
@@ -73,6 +74,7 @@
 - raw payload count, parsed payload count, malformed payload count, event-only payload count를 shared state에서 추적 시작
 - OSD 중심 표시를 최소 검증 화면으로 바꿔 좌측 비디오, 우측 evidence/metadata 패널 구조를 추가
 - IP, username, password, profile 입력을 위한 런타임 연결 설정 UI 추가
+- live frame, overlay label, evidence, metrics, recent metadata를 실제로 표시하는 첫 Qt shell slice 완료
 
 완료 기준:
 - 사용자가 로그를 직접 열지 않아도 evidence 상태를 알 수 있음
@@ -114,6 +116,23 @@
 - 현재 우측 패널 렌더링을 evidence, metrics, recent metadata용 Qt widget으로 교체
 - 검증 workflow는 유지하면서 가독성, DPI 대응, 레이아웃 품질을 개선
 
+첫 번째 scaffold slice에서 완료된 작업:
+- 로컬에 Qt 6.8.3 MSVC 2022 64-bit 설치
+- 빌드에 별도 `CVPP_QtShell` 타깃 추가
+- connection form 영역과 verification layout placeholder를 가진 최소 Qt shell 생성
+- 다음 UI 계층을 준비하면서도 현재 runtime core는 건드리지 않음
+
+두 번째 scaffold slice에서 완료된 작업:
+- Qt connection form을 실제 runtime session 시작과 연결
+- Qt shell이 `VideoRtspSession`, `MetadataRtspSession`, `SharedAppState`를 직접 사용하도록 연결
+- video placeholder를 실제 runtime frame surface와 overlay preview로 교체
+- evidence, metrics, recent metadata 패널을 shared runtime state에서 갱신하도록 연결
+
+Qt 전환의 다음 단계:
+- connection UX와 상태 문구 정리
+- 패널 밀도와 시각적 위계 개선
+- OpenCV view는 fallback으로만 유지하면서 Qt shell을 주 운영 화면으로 검증
+
 ## 마일스톤 8: SQLite 세션 리뷰 기반
 목표: 세션 metrics와 이후 metadata review를 위한 현실적인 로컬 persistence 계층을 추가한다.
 
@@ -122,6 +141,11 @@
 - 세션 종료 metrics를 기존 plain text 로그와 함께 SQLite에도 저장
 - SQLite 추가 이후에도 plain log는 raw evidence로 유지
 - 이후 review / comparison 화면에 필요한 데이터 모델을 먼저 준비
+
+권장 순서:
+1. Qt verification shell polish 마무리
+2. UI 및 session summary의 metadata performance metrics 확장
+3. SQLite foundation 착수
 
 ## 핵심 우려
 - 관측성이 확보되기 전에 큰 리팩터링을 하지 않는다.

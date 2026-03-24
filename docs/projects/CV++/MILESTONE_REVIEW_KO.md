@@ -1,10 +1,10 @@
 ﻿# CV++ 마일스톤 정리
 
 ## 문서 정보
-- 버전: `v0.1`
-- 상태: `작성 완료`
+- 버전: `v0.2`
+- 상태: `업데이트됨`
 - 작성일: `2026-03-23`
-- 최종 수정일: `2026-03-23`
+- 최종 수정일: `2026-03-24`
 - 작성 주체: `PM / Tech Lead / Software Engineer Agents`
 
 ## 요약
@@ -34,11 +34,13 @@
 - raw metadata 및 parsed summary 저장
 - 다수 객체 overlay 표시
 - 실제 세션에서 `Car`, `Human`, `Bicycle` 감지 확인
+- connection form, live frame view, evidence, metrics, recent metadata를 포함한 Qt verification shell 실행
 
 ## 아직 남은 공백
-- evidence visibility가 아직 약하다. 사용자가 로그를 열지 않아도 metadata 수신 여부를 알아야 한다
-- metadata 성능은 아직 반복 detection 기준에 가깝고, 고유 객체 기준 해석이 부족하다
+- Qt shell은 이제 사용 가능하지만, 임시 OpenCV view를 완전히 대체하려면 UI polish가 더 필요하다
+- metadata 성능 해석은 아직 반복 detection 비중이 크고, 고유 객체 및 지속시간 관점이 더 필요하다
 - fragmented payload 때문에 type label 오염이나 per-frame object completeness 문제가 여전히 남을 수 있다
+- session review는 아직 로그 중심이며, SQLite 기반 조회는 시작되지 않았다
 
 ## 결정
 현재 마일스톤은 기반 구축 및 observability 마일스톤으로 닫는다.
@@ -46,15 +48,16 @@
 다음 마일스톤은 metadata evidence와 metadata performance를 사용자가 바로 판단할 수 있게 만드는 방향으로 연다.
 
 ## 다음 마일스톤 목표
-다음 마일스톤은 아래 두 질문에 직접 답할 수 있어야 한다.
+다음 마일스톤은 Qt shell을 주 검증 화면으로 끌어올리면서 아래 두 질문에 직접 답할 수 있어야 한다.
 1. 지금 내가 보고 있는 객체에 대해 카메라가 실제 metadata를 보냈는가?
 2. 세션 전체 기준으로 카메라 metadata 성능은 어느 정도인가?
 
 이를 위해 다음이 필요하다.
-- raw-seen, parsed-count, overlay-count, metadata age를 보여주는 evidence banner 또는 evidence panel
-- 객체 타입별 detection 수와 unique object ID 수를 보여주는 세션 지표
+- 읽기 쉬운 evidence, metrics, recent metadata 패널을 갖춘 Qt verification layout 정리
+- 객체 타입별 detection 수, unique object ID 수, 이후 object continuity / duration 관점으로 확장 가능한 세션 지표
 - 반복 detection event와 고유 추적 객체를 구분하는 기준
 - SungHwan이 로그를 직접 파지 않고도 metadata 품질을 평가할 수 있는 요약 출력
+- 현재 runtime core를 유지한 채 SQLite 기반 session review를 준비하는 단계
 
 ## 권고
-현재 아키텍처를 버릴 필요는 없다. 지금의 메인 앱과 `metadata_probe` 기준선을 유지하고, 다음 마일스톤은 evidence visibility와 metadata performance reporting에 집중하는 것이 맞다.
+현재 아키텍처를 버릴 필요는 없다. 지금의 C++/GStreamer runtime core를 유지하고, Qt shell을 새로운 presentation baseline으로 삼아 다음 마일스톤은 Qt polish, metadata performance reporting, SQLite 준비에 집중하는 것이 맞다.

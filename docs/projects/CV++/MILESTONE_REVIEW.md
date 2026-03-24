@@ -1,10 +1,10 @@
 ﻿# CV++ Milestone Review
 
 ## Document Control
-- Version: `v0.1`
-- Status: `Drafted`
+- Version: `v0.2`
+- Status: `Updated`
 - Created: `2026-03-23`
-- Last Updated: `2026-03-23`
+- Last Updated: `2026-03-24`
 - Owner: `PM / Tech Lead / Software Engineer Agents`
 
 ## Summary
@@ -34,11 +34,13 @@ The app can now:
 - log raw metadata and parsed summaries
 - render overlays for multiple simultaneous objects
 - show that `Car`, `Human`, and `Bicycle` are all present in real sessions
+- launch a Qt verification shell with connection form, live frame view, evidence, metrics, and recent metadata panels
 
 ## Remaining Gaps
-- evidence visibility is still too implicit; the user should not need to inspect logs to know whether metadata arrived
-- metadata performance is still measured mostly as repeated detections, not camera-reported unique objects
+- the Qt shell is viable now, but it still needs UI polish before it can fully replace the temporary OpenCV view
+- metadata performance is still measured mostly as repeated detections, not camera-reported unique objects or durations
 - fragmented payloads can still distort type labels and per-frame object completeness
+- session review is still log-first; SQLite-backed review has not started yet
 
 ## Decision
 Close the current milestone as a foundation and observability milestone.
@@ -46,18 +48,19 @@ Close the current milestone as a foundation and observability milestone.
 Open the next milestone with a tighter product goal: make metadata evidence and metadata performance explicit in the runtime experience.
 
 ## Next Milestone Goal
-The next milestone should answer two user questions directly:
+The next milestone should turn the Qt shell into the primary verification surface and answer two user questions directly:
 1. Did the camera actually send metadata for the object I am looking at?
 2. How good is the camera's metadata performance over a session?
 
 That means the next milestone should add:
-- an evidence banner or evidence panel showing raw-seen, parsed-count, overlay-count, and metadata age
-- session metrics for detections by type and unique object IDs by type
+- a polished Qt verification layout showing evidence, metrics, and recent metadata clearly
+- session metrics for detections by type and unique object IDs by type, with room for object continuity / duration views
 - a clear distinction between repeated detection events and unique tracked objects
 - lightweight summary output that helps SungHwan evaluate camera metadata quality without manual log digging
+- preparation for SQLite-backed session review without replacing the current runtime core
 
 ## Recommendation
-Do not pivot away from the current architecture. Continue from the current app and control probe baseline, and focus the next milestone on evidence visibility and metadata performance reporting.
+Do not pivot away from the current architecture. Keep the current C++/GStreamer runtime core, treat the Qt shell as the new presentation baseline, and focus the next milestone on Qt polish, metadata performance reporting, and SQLite preparation.
 
 ## Learning Outcome
 This milestone also established a useful learning baseline for SungHwan:

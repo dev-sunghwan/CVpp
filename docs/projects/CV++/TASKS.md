@@ -1,10 +1,10 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v0.8`
-- Status: `Milestone 3 in progress; Qt transition planned`
+- Version: `v0.9`
+- Status: `Milestone 3 vertical slice complete; Qt transition in progress`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-23`
+- Last Updated: `2026-03-24`
 - Owner: `Software Engineer Agent`
 
 ## Change History
@@ -18,6 +18,7 @@
 | 2026-03-20 | v0.6 | Corrected the earlier profile-specific conclusion and shifted focus back to full-app orchestration. |
 | 2026-03-23 | v0.7 | Closed the foundation milestone and prepared the next milestone around metadata evidence and performance visibility. |
 | 2026-03-23 | v0.8 | Added the agreed Qt plus SQLite transition track while keeping the current milestone active. |
+| 2026-03-24 | v0.9 | Completed the first live Qt verification shell slice and narrowed the next step to Qt polish plus SQLite preparation. |
 
 ## Summary
 The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The next milestone should make metadata evidence and metadata performance directly visible to the user.
@@ -73,6 +74,7 @@ Completed in the first vertical slice:
 - started tracking raw payload count, parsed payload count, malformed payload count, and event-only payload count in shared runtime state
 - replaced the OSD-first view with a minimal verification layout: video on the left, evidence and metadata panels on the right
 - added a runtime connection setup UI for IP, username, password, and profile input
+- completed a first live Qt shell slice that can connect, show video, render overlay labels, and update evidence / metrics / recent metadata panels from the shared runtime state
 
 Done when:
 - the app exposes evidence state without requiring manual log inspection
@@ -114,6 +116,23 @@ Tasks:
 - replace the current right-side panel rendering with Qt widgets for evidence, metrics, and recent metadata
 - preserve the current verification workflow while improving readability, DPI handling, and layout quality
 
+Completed in the first scaffold slice:
+- installed Qt 6.8.3 MSVC 2022 64-bit locally
+- added a separate `CVPP_QtShell` target to the build
+- created a minimal Qt shell with a connection form area and a verification layout placeholder
+- kept the current runtime core untouched while preparing the next UI layer
+
+Completed in the second scaffold slice:
+- wired the Qt connection form to runtime-backed session startup
+- connected the Qt shell to `VideoRtspSession`, `MetadataRtspSession`, and `SharedAppState`
+- replaced the video placeholder with a live runtime frame surface and overlay preview
+- updated evidence, metrics, and recent metadata panels from the shared runtime state
+
+Next step inside the Qt transition:
+- improve connection UX and state messaging
+- tighten panel density and visual hierarchy
+- keep the OpenCV view only as fallback while validating the Qt shell as the main operator surface
+
 ## Milestone 8: SQLite Session Review Foundation
 Goal: add a practical local persistence layer for session metrics and later metadata review.
 
@@ -122,6 +141,11 @@ Tasks:
 - persist session-end metrics alongside the existing plain text logs
 - keep plain logs as raw evidence even after SQLite is added
 - prepare the data model needed for future review and comparison screens
+
+Recommended order:
+1. finish the Qt verification shell polish
+2. deepen metadata performance metrics in the UI and session summary
+3. start the SQLite foundation
 
 ## Key Concerns
 - Avoid a large refactor before observability is working.

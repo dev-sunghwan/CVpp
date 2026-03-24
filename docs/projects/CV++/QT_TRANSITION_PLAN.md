@@ -1,10 +1,10 @@
 # CV++ Qt Transition Plan
 
 ## Document Control
-- Version: `v0.1`
-- Status: `Proposed`
+- Version: `v0.2`
+- Status: `In Progress`
 - Created: `2026-03-23`
-- Last Updated: `2026-03-23`
+- Last Updated: `2026-03-24`
 - Owner: `Tech Lead / Software Engineer Agents`
 
 ## Purpose
@@ -54,10 +54,19 @@ Runtime Core
 - replace the current connection setup canvas with a Qt form
 - embed the live verification layout in Qt widgets
 
+Current status:
+- `CVPP_QtShell` now builds and launches successfully
+- the shell already includes a connection form, live frame surface, overlay preview, evidence panel, metrics panel, and recent metadata panel
+- the runtime bridge is no longer the blocker; the next focus is UI polish and operational refinement
+
 ### Phase 2
 - move evidence, metrics, and recent metadata into dedicated Qt panels
 - reduce `main.cpp` UI responsibility further
 - keep the current runtime control logic intact
+
+Current status:
+- evidence, metrics, and recent metadata are already wired into Qt widgets from `SharedAppState`
+- the current task is to make the Qt shell readable and trustworthy enough to become the default operator surface
 
 ### Phase 3
 - add SQLite-backed session review panels
@@ -75,4 +84,4 @@ Costs:
 - short-term implementation cost is larger than continuing with OpenCV-only rendering
 
 ## Recommendation
-Treat Qt as the next substantial UI investment. Keep OpenCV-based rendering only as a transitional verification view while the Qt shell is introduced.
+Treat Qt as the active UI transition, not a future experiment. Keep the current C++/GStreamer runtime core, use the OpenCV view only as a fallback while validating the Qt shell, and prepare the next persistence step with SQLite once the shell polish is good enough.
