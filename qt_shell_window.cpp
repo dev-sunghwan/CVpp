@@ -1,7 +1,8 @@
-#include "qt_shell_window.h"
+﻿#include "qt_shell_window.h"
 
 #include <chrono>
 #include <map>
+#include <regex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -18,6 +19,7 @@
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPushButton>
+#include <QFontDatabase>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -50,6 +52,23 @@ void configureTwoColumnTable(QTableWidget* table, const QString& left_header, co
     table->setAlternatingRowColors(true);
 }
 
+void configureThreeColumnTable(QTableWidget* table,
+                               const QString& left_header,
+                               const QString& middle_header,
+                               const QString& right_header) {
+    table->setColumnCount(3);
+    table->setHorizontalHeaderLabels({left_header, middle_header, right_header});
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setFocusPolicy(Qt::NoFocus);
+    table->setAlternatingRowColors(true);
+}
+
 QTableWidgetItem* makeItem(const QString& text) {
     auto* item = new QTableWidgetItem(text);
     item->setFlags(item->flags() & ~Qt::ItemIsEditable);
@@ -67,6 +86,26 @@ void setTableRow(QTableWidget* table, int row, const QString& name, const QStrin
         table->setItem(row, 1, makeItem(value));
     } else {
         table->item(row, 1)->setText(value);
+    }
+}
+
+void setTripleTableRow(QTableWidget* table, int row, const QString& name, const QString& detections, const QString& unique_ids) {
+    if (!table->item(row, 0)) {
+        table->setItem(row, 0, makeItem(name));
+    } else {
+        table->item(row, 0)->setText(name);
+    }
+
+    if (!table->item(row, 1)) {
+        table->setItem(row, 1, makeItem(detections));
+    } else {
+        table->item(row, 1)->setText(detections);
+    }
+
+    if (!table->item(row, 2)) {
+        table->setItem(row, 2, makeItem(unique_ids));
+    } else {
+        table->item(row, 2)->setText(unique_ids);
     }
 }
 
@@ -126,6 +165,39 @@ std::string buildRtspUrl(const QString& ip, const QString& user, const QString& 
            "/profile" + profile.toStdString() + "/media.smp";
 }
 
+QString simplifySummaryLine(const std::string& line) {
+    std::smatch match;
+    std::regex status_re(R"(status=([^ ]+))");
+    std::regex objects_re(R"(objects=(\d+))");
+    std::regex object_re(R"(id=(\d+),type=([A-Za-z]+),score=(\d+)%)");
+
+    QString status = "unknown";
+    QString objects = "0";
+    if (std::regex_search(line, match, status_re) && match.size() > 1) {
+        status = QString::fromStdString(match[1].str());
+    }
+    if (std::regex_search(line, match, objects_re) && match.size() > 1) {
+        objects = QString::fromStdString(match[1].str());
+    }
+
+    QStringList fragments;
+    auto begin = std::sregex_iterator(line.begin(), line.end(), object_re);
+    auto end = std::sregex_iterator();
+    for (auto it = begin; it != end && fragments.size() < 3; ++it) {
+        const auto& object_match = *it;
+        fragments << QString("%1 #%2 (%3%)")
+                         .arg(QString::fromStdString(object_match[2].str()))
+                         .arg(QString::fromStdString(object_match[1].str()))
+                         .arg(QString::fromStdString(object_match[3].str()));
+    }
+
+    QString summary = QString("%1 | objects=%2").arg(status, objects);
+    if (!fragments.isEmpty()) {
+        summary += " | " + fragments.join(", ");
+    }
+    return summary;
+}
+
 void drawOverlay(cv::Mat& frame, const std::vector<DetectedObject>& objects) {
     const int fw = frame.cols;
     const int fh = frame.rows;
@@ -138,7 +210,8 @@ void drawOverlay(cv::Mat& frame, const std::vector<DetectedObject>& objects) {
         int y2 = clampI(static_cast<int>(obj.bottom), 0, fh - 1);
 
         cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), cv::Scalar(0, 255, 0), 2);
-        const std::string label = obj.type + " " + std::to_string(static_cast<int>(obj.likelihood * 100)) + "%";
+        const std::string label =
+            obj.type + " #" + std::to_string(obj.id) + " " + std::to_string(static_cast<int>(obj.likelihood * 100)) + "%";
         int baseline = 0;
         const double font_scale = 0.58;
         const int thickness = 1;
@@ -180,9 +253,9 @@ QtShellWindow::QtShellWindow(QWidget* parent)
     root->setSpacing(12);
 
     auto* title = new QLabel("CV++ Qt Verification Shell");
-    title->setStyleSheet("font-size: 24px; font-weight: 600;");
+    title->setStyleSheet("font-size: 24px; font-weight: 600; color: #e9f0f6;");
 
-    auto* subtitle = new QLabel("Qt shell is now connected to the current runtime core. This is the first live bridge slice.");
+    auto* subtitle = new QLabel("Qt verification is now the primary operator surface. This slice focuses on evidence readability and session clarity.");
     subtitle->setStyleSheet("font-size: 13px; color: #8ea0b3;");
 
     root->addWidget(title);
@@ -191,6 +264,17 @@ QtShellWindow::QtShellWindow(QWidget* parent)
     root->addWidget(buildVerificationPanel(), 1);
 
     setCentralWidget(central);
+    setStyleSheet(
+        "QMainWindow, QWidget { background-color: #11161b; color: #d9e1e8; }"
+        "QGroupBox { border: 1px solid #273341; border-radius: 8px; margin-top: 10px; font-weight: 600; color: #e6edf3; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }"
+        "QLineEdit, QComboBox, QListWidget, QTableWidget { background-color: #182029; color: #edf3f8; border: 1px solid #2f3d4b; border-radius: 6px; }"
+        "QLineEdit, QComboBox { padding: 6px 8px; }"
+        "QPushButton { background-color: #2b6cb0; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-weight: 600; }"
+        "QPushButton:disabled { background-color: #44515c; color: #a6b0b9; }"
+        "QHeaderView::section { background-color: #212b36; color: #dce6ee; border: none; padding: 6px; font-weight: 600; }"
+        "QTableWidget { gridline-color: #263240; }"
+        "QListWidget::item { padding: 4px 6px; }");
 
     poll_timer_ = new QTimer(this);
     connect(poll_timer_, &QTimer::timeout, this, [this]() { updateRuntime(); });
@@ -230,19 +314,28 @@ QWidget* QtShellWindow::buildConnectionPanel() {
     form->addRow("Profile", profile_combo_);
 
     auto* action_layout = new QVBoxLayout();
+    status_badge_ = new QLabel("Idle");
+    status_badge_->setAlignment(Qt::AlignCenter);
+    status_badge_->setMinimumWidth(180);
     connect_button_ = new QPushButton("Connect");
+    disconnect_button_ = new QPushButton("Disconnect");
+    disconnect_button_->setEnabled(false);
     connection_summary_ = new QLabel("Not connected.");
     connection_summary_->setWordWrap(true);
-    connection_summary_->setStyleSheet("color: #8ea0b3;");
+    connection_summary_->setStyleSheet("color: #c7d1da; background-color: #182029; border: 1px solid #2f3d4b; border-radius: 6px; padding: 8px;");
 
     connect(connect_button_, &QPushButton::clicked, this, [this]() { startRuntime(); });
+    connect(disconnect_button_, &QPushButton::clicked, this, [this]() { stopRuntime(); });
 
+    action_layout->addWidget(status_badge_);
     action_layout->addWidget(connect_button_);
+    action_layout->addWidget(disconnect_button_);
     action_layout->addWidget(connection_summary_);
     action_layout->addStretch(1);
 
     layout->addWidget(form_widget, 0);
     layout->addLayout(action_layout, 1);
+    setStatusBadge("Idle", "#3a4652", "#f0f4f8");
     return box;
 }
 
@@ -280,14 +373,15 @@ QWidget* QtShellWindow::buildVerificationPanel() {
 
     auto* metrics_box = new QGroupBox("Session Metrics");
     auto* metrics_layout = new QVBoxLayout(metrics_box);
-    metrics_table_ = new QTableWidget(0, 2, metrics_box);
-    configureTwoColumnTable(metrics_table_, "Metric", "Value");
+    metrics_table_ = new QTableWidget(0, 3, metrics_box);
+    configureThreeColumnTable(metrics_table_, "Type", "Detections", "Unique IDs");
     metrics_layout->addWidget(metrics_table_);
 
     auto* metadata_box = new QGroupBox("Recent Metadata");
     auto* metadata_layout = new QVBoxLayout(metadata_box);
     recent_metadata_list_ = new QListWidget(metadata_box);
     recent_metadata_list_->addItem("No parsed metadata yet.");
+    recent_metadata_list_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     metadata_layout->addWidget(recent_metadata_list_);
 
     right_layout->addWidget(evidence_box);
@@ -374,6 +468,9 @@ void QtShellWindow::startRuntime() {
     runtime_active_ = true;
     runtime_started_at_ = std::chrono::steady_clock::now();
     connect_button_->setText("Reconnect");
+    setRuntimeUiEnabled(false);
+    disconnect_button_->setEnabled(true);
+    setStatusBadge("Starting video", "#8a6d1f");
     connection_summary_->setText("Video session started. Waiting for first frame before metadata startup.");
     recent_metadata_list_->clear();
     recent_metadata_list_->addItem("Waiting for parsed metadata...");
@@ -406,6 +503,16 @@ void QtShellWindow::stopRuntime() {
     if (connection_summary_) {
         connection_summary_->setText("Not connected.");
     }
+    if (status_badge_) {
+        setStatusBadge("Idle", "#3a4652", "#f0f4f8");
+    }
+    if (connect_button_) {
+        connect_button_->setText("Connect");
+    }
+    if (disconnect_button_) {
+        disconnect_button_->setEnabled(false);
+    }
+    setRuntimeUiEnabled(true);
     if (evidence_table_) {
         setTableRow(evidence_table_, 0, "raw", "not connected");
         setTableRow(evidence_table_, 1, "parsed", "0");
@@ -442,7 +549,8 @@ void QtShellWindow::updateRuntime() {
 
             if ((video_ready || startup_wait_expired) && metadata_session_->start()) {
                 metadata_started_ = true;
-                connection_summary_->setText("Video and metadata sessions running.");
+                setStatusBadge("Metadata starting", "#0e7490");
+                connection_summary_->setText("Video is running. Metadata session has started and is waiting for the first payload.");
             }
         }
 
@@ -522,15 +630,24 @@ void QtShellWindow::refreshUiFromState() {
     setTableRow(evidence_table_, 3, "age", age_ms >= 0 ? QString::number(age_ms) + " ms" : "n/a");
     setTableRow(evidence_table_, 4, "fresh", metadata_is_fresh ? "yes" : "no");
 
-    metrics_table_->setRowCount(0);
-    int row = 0;
-    setTableRow(metrics_table_, row++, "Parsed payloads", QString::number(total_parsed_payloads));
-    setTableRow(metrics_table_, row++, "Detection events", QString::number(total_detection_events));
-    for (const auto& entry : detections_by_type) {
-        setTableRow(metrics_table_, row++, QString::fromStdString(entry.first + " detections"), QString::number(entry.second));
-    }
+    std::map<std::string, int> combined_types = detections_by_type;
     for (const auto& entry : unique_ids_by_type) {
-        setTableRow(metrics_table_, row++, QString::fromStdString(entry.first + " unique IDs"), QString::number(entry.second));
+        if (!combined_types.count(entry.first)) {
+            combined_types[entry.first] = 0;
+        }
+    }
+    metrics_table_->setRowCount(static_cast<int>(combined_types.size()) + 1);
+    int row = 0;
+    setTripleTableRow(metrics_table_, row++, "Payloads / events",
+                      QString::number(total_parsed_payloads),
+                      QString::number(total_detection_events));
+    for (const auto& entry : combined_types) {
+        const int unique_count = unique_ids_by_type.count(entry.first) ? unique_ids_by_type[entry.first] : 0;
+        setTripleTableRow(metrics_table_,
+                          row++,
+                          QString::fromStdString(entry.first),
+                          QString::number(entry.second),
+                          QString::number(unique_count));
     }
 
     recent_metadata_list_->clear();
@@ -538,17 +655,49 @@ void QtShellWindow::refreshUiFromState() {
         recent_metadata_list_->addItem("No parsed metadata yet.");
     } else {
         for (const auto& line : recent_summaries) {
-            recent_metadata_list_->addItem(QString::fromStdString(line));
+            recent_metadata_list_->addItem(simplifySummaryLine(line));
         }
     }
 
     if (has_video_frame && total_raw_metadata_samples > 0) {
-        connection_summary_->setText(QString::fromStdString("Video and metadata active | " + status_text));
+        setStatusBadge("Live", "#166534");
+        connection_summary_->setText(QString::fromStdString("Video and metadata active. Last parser status: " + status_text));
     } else if (has_video_frame) {
-        connection_summary_->setText("Video active, waiting for metadata.");
+        setStatusBadge("Video only", "#0e7490");
+        connection_summary_->setText("Video is active. Waiting for the first metadata payload.");
     } else if (total_raw_metadata_samples > 0) {
-        connection_summary_->setText(QString::fromStdString("Metadata active, but video has not started yet | " + status_text));
+        setStatusBadge("Metadata only", "#b45309");
+        connection_summary_->setText(QString::fromStdString("Metadata is active, but video has not started yet. Last parser status: " + status_text));
     } else {
-        connection_summary_->setText("Video session retrying; metadata not active yet.");
+        setStatusBadge("Retrying", "#8a6d1f");
+        connection_summary_->setText("Video session is retrying. Metadata is not active yet.");
     }
 }
+
+void QtShellWindow::setRuntimeUiEnabled(bool enabled) {
+    if (ip_edit_) {
+        ip_edit_->setEnabled(enabled);
+    }
+    if (username_edit_) {
+        username_edit_->setEnabled(enabled);
+    }
+    if (password_edit_) {
+        password_edit_->setEnabled(enabled);
+    }
+    if (profile_combo_) {
+        profile_combo_->setEnabled(enabled);
+    }
+}
+
+void QtShellWindow::setStatusBadge(const QString& text, const QString& background, const QString& foreground) {
+    if (!status_badge_) {
+        return;
+    }
+    status_badge_->setText(text);
+    status_badge_->setStyleSheet(
+        QString("background-color: %1; color: %2; border-radius: 12px; padding: 6px 12px; font-weight: 700;")
+            .arg(background, foreground));
+}
+
+
+

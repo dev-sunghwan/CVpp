@@ -40,15 +40,19 @@ private:
     void stopRuntime();
     void updateRuntime();
     void refreshUiFromState();
+    void setRuntimeUiEnabled(bool enabled);
+    void setStatusBadge(const QString& text, const QString& background, const QString& foreground = "#ecf3f9");
 
     QLineEdit* ip_edit_ = nullptr;
     QLineEdit* username_edit_ = nullptr;
     QLineEdit* password_edit_ = nullptr;
     QComboBox* profile_combo_ = nullptr;
     QPushButton* connect_button_ = nullptr;
+    QPushButton* disconnect_button_ = nullptr;
 
     QLabel* stream_placeholder_ = nullptr;
     QLabel* connection_summary_ = nullptr;
+    QLabel* status_badge_ = nullptr;
     QTableWidget* evidence_table_ = nullptr;
     QTableWidget* metrics_table_ = nullptr;
     QListWidget* recent_metadata_list_ = nullptr;

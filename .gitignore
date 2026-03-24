@@ -10,3 +10,4 @@ opencv/
 *.ilk
 *.log
 .gemini/
+.omx/
