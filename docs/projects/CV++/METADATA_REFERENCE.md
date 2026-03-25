@@ -1,10 +1,10 @@
 ﻿# CV++ Metadata Reference
 
 ## Document Control
-- Version: `v0.1`
-- Status: `Drafted`
+- Version: `v0.2`
+- Status: `Updated to current parser taxonomy`
 - Created: `2026-03-24`
-- Last Updated: `2026-03-24`
+- Last Updated: `2026-03-25`
 - Owner: `Software Engineer Agent`
 
 ## Purpose
@@ -13,72 +13,94 @@ This document explains the parsed metadata values currently surfaced by CV++ so 
 ## Parsing Status Values
 ### `success`
 Meaning:
-- the payload contained object metadata and the parser recovered the expected object blocks cleanly
+- the payload ended in a clean enough state for the parser to treat it as a successful object-bearing parse
 
 Typical interpretation:
 - strong evidence that the camera sent usable object metadata
-- good candidate for overlay and session metrics
+- can still appear with `message="recovered-continuation"` when a previously fragmented payload becomes complete
+
+### `unknown-pattern`
+Meaning:
+- the parser found object blocks but at least one object detail pattern did not match the expected forms cleanly
+
+Typical interpretation:
+- object metadata is present
+- the payload is useful, but parser coverage is incomplete for some object detail
 
 ### `no-objects`
 Meaning:
-- the payload was parseable, but no `<tt:Object>` block was found
+- the payload was metadata, but no `<tt:Object>` block was found
 
 Typical interpretation:
-- the camera sent metadata, but not object-bearing metadata for that payload
-- often corresponds to event-only or non-object metadata
+- usually event-only or non-object metadata
+- useful evidence that metadata traffic exists even when overlay objects do not
 
 ### `malformed-payload`
 Meaning:
-- metadata arrived, but the XML payload was fragmented, incomplete, or otherwise not cleanly closed
+- metadata arrived, but the current payload or continuation chain is still fragmented or incomplete
 
 Typical interpretation:
 - this does **not** mean metadata was absent
-- it usually means the parser had to recover objects from a partial payload
-- still useful for overlay and evidence if object fields were recovered
-
-Current observed frequency:
-- this is currently the most common status in live sessions, so it should be treated as a normal runtime condition, not a rare exception
+- objects may still be partially or mostly recoverable
+- this remains a normal live condition in saved Hanwha sessions, not a rare exception
 
 ## Message Values Seen So Far
-### `""` (empty message)
+### `clean-object-payload`
 Meaning:
-- no extra parser note was attached
+- the payload contained object metadata and closed cleanly in the current chunk
 
 Interpretation:
-- low information value for UI
-- usually safe to omit from operator-facing summaries
+- strongest clean baseline
+- useful for parser-health metrics
 
-### `Object block did not close cleanly`
+### `clean-object-payload-with-unknown-patterns`
 Meaning:
-- an object block was cut off before the XML closed normally
+- the payload closed cleanly, but some object-detail pattern was only partially understood
 
 Interpretation:
-- important parser-health signal
-- object fields may still be partially recovered
-- useful in logs and parser-health metrics
+- still object-bearing and useful
+- indicates a parser-coverage gap rather than transport loss
 
-### `XML start marker not found`
+### `metadata-without-objects`
 Meaning:
-- the current payload chunk did not contain the XML start marker
+- metadata was present, but no `<tt:Object>` block was found
 
 Interpretation:
-- usually indicates fragmented transport / chunk boundary issues
-- useful for debugging payload assembly behavior
+- usually event-only metadata
+- should not be grouped with parser damage
 
-### `No <tt:Object> blocks found`
+### `truncated-object-fragment`
 Meaning:
-- the payload contained metadata but no object block
+- an object block started, but the payload stopped before the object block closed
 
 Interpretation:
-- useful evidence when overlay is absent but metadata traffic still exists
+- direct signal that transport fragmentation cut the object payload
+- often followed by one or more continuation parses
 
-### `Objects parsed successfully`
+### `continuation-without-xml-start`
 Meaning:
-- the parser recovered object blocks cleanly
+- the current chunk did not contain `<?xml`, so it looks like a continuation fragment rather than a fresh XML start
 
 Interpretation:
-- strong positive signal
-- useful for success-rate metrics, but too repetitive for dense operator UI
+- useful transport-fragmentation signal
+- usually means the parser is seeing a mid-stream continuation
+
+### `recovered-continuation`
+Meaning:
+- the parser is working on a continuation chain and recovered usable object data from it
+
+Interpretation:
+- can appear with either `malformed-payload` or `success`
+- if the continuation chain still ends mid-object, status remains `malformed-payload`
+- if the continuation chain becomes complete, status can end as `success`
+
+### `recovered-continuation-with-unknown-patterns`
+Meaning:
+- continuation recovery succeeded enough to produce objects, but some object-detail pattern still did not match the expected parser forms
+
+Interpretation:
+- transport recovery succeeded
+- parser coverage still needs improvement for some detail path
 
 ## Object Fields
 ### `id`
@@ -86,14 +108,14 @@ Meaning:
 - camera-reported object identifier (`ObjectId`)
 
 Interpretation:
-- use this to see whether the camera is treating repeated detections as the same tracked object
-- repeated appearances of the same `id` are not new unique objects; they are repeated detection events for one camera-reported object
+- use this to see whether the camera is treating repeated detections as one tracked object
+- repeated appearances of the same `id` are repeated detection events, not new unique objects
 
 ### `type`
 Meaning:
-- camera-reported object class after parser normalization
+- object class after CV++ normalization
 
-Most common values seen so far:
+Most common stable values seen so far:
 - `Car`
 - `Human`
 - `Vehicle`
@@ -105,8 +127,9 @@ Most common values seen so far:
 - `Unknown`
 
 Notes:
-- `Car` and `Vehicle` can both appear in real sessions
-- fragmented payloads can still produce damaged labels such as `Hu`, `Ca`, or `Caar`; these should be treated as parser-noise rather than stable classes
+- `Car` and `Vehicle` both appear in real Hanwha sessions
+- saved-session analysis shows parser-noise labels exist, but they are rare relative to stable normalized labels
+- labels such as `Cayr`, `Caar`, or `Hukuman` should be treated as parser-noise, not as stable product categories
 
 ### `score`
 Meaning:
@@ -119,33 +142,38 @@ Interpretation:
 ## Practical Reading Guide
 ### When overlay is present
 - the camera sent object metadata
-- the app parsed enough fields to render it
+- the app parsed enough detail to render it
 
 ### When overlay is absent but `raw=seen`
-- inspect `parsed` count and recent metadata summary
-- likely causes: event-only metadata, malformed payload with no recoverable object, or stale overlay state
+- inspect `parsed`, `fresh`, and recent metadata summaries
+- likely causes: event-only metadata, fragmented payload with no currently recoverable object, or stale overlay state
 
 ### When `malformed-payload` is present
-- do not assume failure immediately
-- first check whether objects were still recovered
+- do not treat it as metadata absence
+- first check `objects`
 - if `objects > 0`, the payload was still operationally useful
+
+### When `recovered-continuation` is present
+- treat it as evidence that continuation handling is active
+- if status is `success`, the continuation chain became complete
+- if status is `malformed-payload`, the chain still ended mid-fragment
 
 ### When the same object remains on screen
 - compare `ObjectId` in overlay labels
-- same `ObjectId` across frames suggests the camera is maintaining one track
+- the same `ObjectId` across frames suggests one continuing camera track
 - changing `ObjectId` for the same visible object may indicate track instability
 
 ## Current UI Guidance
 Recommended operator-facing presentation:
-- show `status` in a simplified way
-- suppress empty `message` values
-- retain important parser notes such as `Object block did not close cleanly`
+- show both `status` and a simplified parser-health category
+- keep raw parser messages available in logs and forensic views
+- group parser-noise labels separately from stable class metrics
 - show `ObjectId` with overlay labels for track continuity inspection
 - prefer compact summaries such as:
-  - `malformed-payload | objects=2 | Car #165420 (57%), Vehicle #165454 (91%)`
+  - `success | recovered-continuation | objects=9 | Car #169173 (85%), Human #169375 (82%)`
 
 ## Next Reference Work
 The next useful extension of this document would be:
 - mapping raw XML fields to parsed runtime fields
-- documenting which class labels come directly from camera metadata versus parser normalization
-- adding real examples for `Car`, `Human`, `Bicycle`, `Vehicle`, and event-only payloads
+- exposing parser-health category counts directly in the Qt shell
+- documenting when a raw camera label becomes a normalized runtime label

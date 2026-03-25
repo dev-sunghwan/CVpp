@@ -1,10 +1,10 @@
 ﻿# PROJECT_BRIEF
 
 ## Document Control
-- Version: `v0.2`
-- Status: `Updated after Milestone 1`
+- Version: `v0.3`
+- Status: `Updated with thermal metadata future direction`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-18`
+- Last Updated: `2026-03-25`
 - Owner: `Project Owner + Team SH`
 
 ## Change History
@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | 2026-03-18 | v0.1 | Initial English brief imported into the repository. |
 | 2026-03-18 | v0.2 | Updated project status and direction to match approved MVP scope and Milestone 1 progress. |
+| 2026-03-25 | v0.3 | Added thermal camera metadata validation to the mid-term expansion direction. |
 
 ## 1. Project Overview
 `CV++` is a C++-based RTSP streaming and metadata verification project for Hanwha Vision camera and NVR environments.
@@ -78,3 +79,4 @@ These remain out of scope for v0.1.
 
 ## 8. One-Line Summary
 CV++ is building a practical C++ RTSP and metadata verification foundation for Hanwha environments, and the current focus is observability, not AI expansion.
+

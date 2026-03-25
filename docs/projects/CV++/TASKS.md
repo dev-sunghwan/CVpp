@@ -1,10 +1,10 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v0.9`
-- Status: `Milestone 3 vertical slice complete; Qt transition in progress`
+- Version: `v1.1`
+- Status: `Milestone 3 active; thermal metadata future track added`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-24`
+- Last Updated: `2026-03-25`
 - Owner: `Software Engineer Agent`
 
 ## Change History
@@ -19,9 +19,11 @@
 | 2026-03-23 | v0.7 | Closed the foundation milestone and prepared the next milestone around metadata evidence and performance visibility. |
 | 2026-03-23 | v0.8 | Added the agreed Qt plus SQLite transition track while keeping the current milestone active. |
 | 2026-03-24 | v0.9 | Completed the first live Qt verification shell slice and narrowed the next step to Qt polish plus SQLite preparation. |
+| 2026-03-25 | v1.0 | Added Hanwha metadata baseline analysis and SQLite storage requirements docs, and narrowed the next step to parser-health visibility plus SQLite foundation work. |
+| 2026-03-25 | v1.1 | Added a deferred future milestone for thermal camera metadata validation. |
 
 ## Summary
-The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The next milestone should make metadata evidence and metadata performance directly visible to the user.
+The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The next milestone should make metadata evidence, parser health, and metadata performance directly visible to the user.
 
 ## Milestone 1: Minimal Runtime Skeleton
 Status: completed.
@@ -75,6 +77,16 @@ Completed in the first vertical slice:
 - replaced the OSD-first view with a minimal verification layout: video on the left, evidence and metadata panels on the right
 - added a runtime connection setup UI for IP, username, password, and profile input
 - completed a first live Qt shell slice that can connect, show video, render overlay labels, and update evidence / metrics / recent metadata panels from the shared runtime state
+
+Completed in the current analysis/documentation slice:
+- documented the current Hanwha metadata baseline from saved sessions, including parser-health ratios, stable class baseline, and parser-noise observations
+- documented the minimal SQLite storage requirements needed to turn session logs into local review data without replacing the raw log flow
+- aligned metadata analysis docs with the current parser taxonomy: `truncated-object-fragment`, `recovered-continuation`, and `metadata-without-objects`
+
+Next step inside Milestone 3:
+- surface parser-health counts in the Qt shell using the current taxonomy
+- make parser-noise labels visible in forensic views but grouped away from headline metrics
+- keep session summaries aligned with the new baseline docs so later SQLite ingestion can stay mechanical
 
 Done when:
 - the app exposes evidence state without requiring manual log inspection
@@ -142,11 +154,29 @@ Tasks:
 - keep plain logs as raw evidence even after SQLite is added
 - prepare the data model needed for future review and comparison screens
 
+Completed in planning:
+- drafted `docs/projects/CV++/SQLITE_STORAGE_REQUIREMENTS.md`
+- narrowed the first schema to `sessions`, `session_artifacts`, `parsed_payloads`, `parsed_objects`, and `session_type_metrics`
+
 Recommended order:
 1. finish the Qt verification shell polish
 2. deepen metadata performance metrics in the UI and session summary
 3. start the SQLite foundation
 
+## Milestone 9: Thermal Camera Metadata Validation
+Status: deferred future track.
+
+Goal: extend the verification workflow so CV++ can validate thermal-camera metadata once the current visible-light Hanwha observability path is stable.
+
+Tasks:
+- confirm RTSP and metadata delivery behavior from the target thermal camera
+- capture representative thermal metadata fixtures and session logs
+- document payload format and transport differences relative to the current Hanwha baseline
+- verify whether the current parser normalization can be reused or whether a separate thermal metadata path is needed
+- define the UI, review, and storage adjustments needed to compare visible-light and thermal metadata sessions
+
+Start condition:
+- begin only after the current Milestone 3 and Milestone 8 foundations are stable enough that thermal work does not blur the current observability baseline
 ## Key Concerns
 - Avoid a large refactor before observability is working.
 - Do not build a polished UI before raw metadata evidence is trustworthy.
@@ -164,5 +194,10 @@ Recommended order:
 
 ## Reference
 - `docs/projects/CV++/HIGH_RESOLUTION_PROFILE_INVESTIGATION.md`
+- `docs/projects/CV++/HANWHA_METADATA_BASELINE_ANALYSIS.md`
 - `docs/projects/CV++/MILESTONE_REVIEW.md`
+- `docs/projects/CV++/SQLITE_STORAGE_REQUIREMENTS.md`
+- `docs/projects/CV++/MESSAGE_INVESTIGATION.md`
+- `docs/projects/CV++/METADATA_REFERENCE.md`
 - `docs/projects/CV++/CPP_LEARNING_GUIDE.md`
+
