@@ -1,4 +1,4 @@
-#include <atomic>
+﻿#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <iostream>
@@ -324,10 +324,17 @@ cv::Mat render_connection_setup(const ConnectionFormData& form, int active_field
 }
 
 bool run_connection_setup(AppConfig& config) {
+    if (const char* skip_setup = std::getenv("CVPP_SKIP_CONNECTION_SETUP")) {
+        if (std::string(skip_setup) == "1") {
+            return true;
+        }
+    }
+
     ConnectionFormData form;
     parse_rtsp_connection_defaults(config.rtsp_url, form);
-    form.profile = "2";
-
+    if (form.profile.empty()) {
+        form.profile = "2";
+    }
     int active_field = 0;
     cv::namedWindow("CV++ Connection Setup", cv::WINDOW_NORMAL);
     cv::resizeWindow("CV++ Connection Setup", 1100, 620);
@@ -495,13 +502,14 @@ int main(int argc, char* argv[]) {
         std::cerr << "[ERROR] Failed to start VideoRtspSession." << std::endl;
         return 1;
     }
-
     bool metadata_started = false;
+    constexpr auto kMetadataStartDelay = std::chrono::milliseconds(1500);
     if (config.enable_metadata) {
         std::cout << "[INFO] Waiting for first video frame before starting metadata session..." << std::endl;
         logger.log_event("Main: waiting for first video frame before starting metadata session");
 
         const auto startup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        std::chrono::steady_clock::time_point video_ready_since{};
         while (std::chrono::steady_clock::now() < startup_deadline) {
             video_session.poll_bus_once(50 * GST_MSECOND);
 
@@ -512,7 +520,15 @@ int main(int argc, char* argv[]) {
             }
 
             if (video_ready) {
-                break;
+                if (video_ready_since == std::chrono::steady_clock::time_point{}) {
+                    video_ready_since = std::chrono::steady_clock::now();
+                    logger.log_event("Main: first video frame observed; delaying metadata startup briefly for a stable video baseline");
+                }
+                if (std::chrono::steady_clock::now() - video_ready_since >= kMetadataStartDelay) {
+                    break;
+                }
+            } else {
+                video_ready_since = std::chrono::steady_clock::time_point{};
             }
 
 #ifdef _WIN32
@@ -658,3 +674,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO] Done." << std::endl;
     return 0;
 }
+
+
+
+

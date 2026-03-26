@@ -1,7 +1,7 @@
 ﻿# CV++ Metadata Reference
 
 ## Document Control
-- Version: `v0.2`
+- Version: `v0.3`
 - Status: `Updated to current parser taxonomy`
 - Created: `2026-03-24`
 - Last Updated: `2026-03-25`
@@ -10,6 +10,27 @@
 ## Purpose
 This document explains the parsed metadata values currently surfaced by CV++ so SungHwan can interpret runtime output, recent metadata lines, and session logs consistently.
 
+## At-A-Glance Table
+| Layer | What It Represents | Current Field / Value | Example | How To Read It |
+| --- | --- | --- | --- | --- |
+| Camera raw metadata | Whether the payload contains video analytics object data | raw XML with `<tt:VideoAnalytics><tt:Frame>` and `<tt:Object ...>` blocks | object-bearing XML payload | Means the camera sent object metadata, not only event traffic. |
+| Camera raw metadata | Camera-reported tracked object ID | `ObjectId` | `169173`, `131951` | Repeated appearances of the same ID are repeated detections of one camera-side track. |
+| Camera raw metadata | Camera-reported class label before normalization | raw type text in metadata | `Car`, `Human`, `Vehicle`, `Bus` | This is what the camera attempted to label the object as. |
+| Camera raw metadata | Camera-reported likelihood / confidence | raw likelihood value | `0.82` in metadata, later shown as `82%` | Camera-side score, not app-generated confidence. |
+| Parser output | Session-level parse classification | `status` | `success`, `malformed-payload`, `no-objects`, `unknown-pattern` | Tells whether the current payload ended cleanly, stayed fragmented, had no objects, or exposed a parser-coverage gap. |
+| Parser output | Fragment / recovery note | `message` | `clean-object-payload`, `truncated-object-fragment`, `recovered-continuation`, `metadata-without-objects` | Explains what kind of payload condition the parser believes it is seeing. |
+| Parser output | Normalized object identifier | `id` | `169173` | Usually maps directly to camera `ObjectId`. |
+| Parser output | Normalized object class | `type` | `Car`, `Human`, `Vehicle`, `Bicycle`, `Unknown` | Parser-normalized class used by overlay, metrics, and review UI. |
+| Parser output | Operator-facing confidence display | `score` | `85%` | Percent form of the camera likelihood used in summaries and overlays. |
+| Runtime / UI | Compact operator summary | recent metadata summary line | `success | recovered-continuation | objects=9 | Car #169173 (85%)` | Best quick-read line for deciding what happened without opening raw XML. |
+
+## Quick Reading Examples
+| Situation | Raw Camera Side | Parser Side | Practical Meaning |
+| --- | --- | --- | --- |
+| Object metadata arrived cleanly | object-bearing XML payload | `status=success`, `message=clean-object-payload` | Best-case object payload; strong evidence for overlay and metrics. |
+| Object metadata arrived fragmented but useful | fragmented XML / continuation chain | `status=malformed-payload`, `message=recovered-continuation`, `objects>0` | Metadata was present and operationally useful even though the payload was not fully clean. |
+| Metadata arrived without objects | event-only or non-object metadata | `status=no-objects`, `message=metadata-without-objects` | Metadata traffic existed, but there was no object block to overlay. |
+| Parser saw a cut object block | truncated object fragment | `status=malformed-payload`, `message=truncated-object-fragment` | Transport fragmentation interrupted the object payload mid-block. |
 ## Parsing Status Values
 ### `success`
 Meaning:
@@ -177,3 +198,4 @@ The next useful extension of this document would be:
 - mapping raw XML fields to parsed runtime fields
 - exposing parser-health category counts directly in the Qt shell
 - documenting when a raw camera label becomes a normalized runtime label
+

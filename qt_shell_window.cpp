@@ -120,6 +120,27 @@ std::map<std::string, int> toSortedUniqueCountMap(const std::unordered_map<std::
     }
     return result;
 }
+int familyDetectionCount(const std::map<std::string, int>& detections, const std::vector<std::string>& family_types) {
+    int total = 0;
+    for (const auto& type : family_types) {
+        auto it = detections.find(type);
+        if (it != detections.end()) {
+            total += it->second;
+        }
+    }
+    return total;
+}
+int familyUniqueCount(const std::unordered_map<std::string, std::unordered_set<int>>& source,
+                      const std::vector<std::string>& family_types) {
+    std::unordered_set<int> ids;
+    for (const auto& type : family_types) {
+        auto it = source.find(type);
+        if (it != source.end()) {
+            ids.insert(it->second.begin(), it->second.end());
+        }
+    }
+    return static_cast<int>(ids.size());
+}
 
 bool parseRtspDefaults(const std::string& url, QString& ip, QString& user, QString& password, QString& profile) {
     const std::string prefix = "rtsp://";
@@ -544,13 +565,24 @@ void QtShellWindow::updateRuntime() {
                 video_ready = !shared_state_->current_frame.empty();
             }
 
-            const bool startup_wait_expired =
-                std::chrono::steady_clock::now() - runtime_started_at_ > std::chrono::seconds(15);
+            const auto now = std::chrono::steady_clock::now();
+            if (video_ready) {
+                if (video_ready_since_ == std::chrono::steady_clock::time_point{}) {
+                    video_ready_since_ = now;
+                    connection_summary_->setText("Video is running. Holding metadata startup briefly to stabilize the video baseline.");
+                }
+            } else {
+                video_ready_since_ = std::chrono::steady_clock::time_point{};
+            }
 
-            if ((video_ready || startup_wait_expired) && metadata_session_->start()) {
+            const bool startup_wait_expired = now - runtime_started_at_ > std::chrono::seconds(15);
+            const bool video_settled = video_ready_since_ != std::chrono::steady_clock::time_point{} &&
+                (now - video_ready_since_ >= std::chrono::milliseconds(1500));
+
+            if ((video_settled || startup_wait_expired) && metadata_session_->start()) {
                 metadata_started_ = true;
                 setStatusBadge("Metadata starting", "#0e7490");
-                connection_summary_->setText("Video is running. Metadata session has started and is waiting for the first payload.");
+                connection_summary_->setText("Video baseline is stable. Metadata session has started and is waiting for the first payload.");
             }
         }
 
@@ -561,7 +593,6 @@ void QtShellWindow::updateRuntime() {
 
     refreshUiFromState();
 }
-
 void QtShellWindow::refreshUiFromState() {
     if (!shared_state_) {
         return;
@@ -584,6 +615,7 @@ void QtShellWindow::refreshUiFromState() {
     std::chrono::steady_clock::time_point last_raw_metadata_seen{};
     std::string status_text = "No metadata parsed yet";
     std::map<std::string, int> detections_by_type;
+    std::unordered_map<std::string, std::unordered_set<int>> unique_id_sets_by_type;
     std::map<std::string, int> unique_ids_by_type;
     std::vector<std::string> recent_summaries;
 
@@ -600,6 +632,7 @@ void QtShellWindow::refreshUiFromState() {
         total_parsed_payloads = shared_state_->total_parsed_payloads;
         last_raw_metadata_seen = shared_state_->last_raw_metadata_seen;
         detections_by_type = toSortedMap(shared_state_->detections_by_type);
+        unique_id_sets_by_type = shared_state_->unique_ids_by_type;
         unique_ids_by_type = toSortedUniqueCountMap(shared_state_->unique_ids_by_type);
         recent_summaries = shared_state_->recent_parsed_summaries;
 
@@ -636,16 +669,26 @@ void QtShellWindow::refreshUiFromState() {
             combined_types[entry.first] = 0;
         }
     }
-    metrics_table_->setRowCount(static_cast<int>(combined_types.size()) + 1);
+    const std::vector<std::string> vehicle_family_types = {"Vehicle", "Car", "Bus", "Truck", "Motorcycle"};
+    const int vehicle_family_detections = familyDetectionCount(detections_by_type, vehicle_family_types);
+    const int vehicle_family_unique = familyUniqueCount(unique_id_sets_by_type, vehicle_family_types);
+    metrics_table_->setRowCount(static_cast<int>(combined_types.size()) + 2);
     int row = 0;
     setTripleTableRow(metrics_table_, row++, "Payloads / events",
                       QString::number(total_parsed_payloads),
                       QString::number(total_detection_events));
+    setTripleTableRow(metrics_table_, row++, "Vehicle family",
+                      QString::number(vehicle_family_detections),
+                      QString::number(vehicle_family_unique));
     for (const auto& entry : combined_types) {
         const int unique_count = unique_ids_by_type.count(entry.first) ? unique_ids_by_type[entry.first] : 0;
+        QString label = QString::fromStdString(entry.first);
+        if (entry.first == "Vehicle") {
+            label += " (general)";
+        }
         setTripleTableRow(metrics_table_,
                           row++,
-                          QString::fromStdString(entry.first),
+                          label,
                           QString::number(entry.second),
                           QString::number(unique_count));
     }
@@ -698,6 +741,11 @@ void QtShellWindow::setStatusBadge(const QString& text, const QString& backgroun
         QString("background-color: %1; color: %2; border-radius: 12px; padding: 6px 12px; font-weight: 700;")
             .arg(background, foreground));
 }
+
+
+
+
+
 
 
 

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <chrono>
 #include <string>
@@ -35,12 +35,17 @@ private:
     SharedAppState& state_;
     bool enabled_ = false;
     GstElement* pipeline_ = nullptr;
+    GstElement* meta_jitterbuffer_ = nullptr;
+    GstElement* meta_depay_ = nullptr;
     GstElement* meta_sink_ = nullptr;
     GstElement* video_sink_ = nullptr;
     int metadata_sample_count_ = 0;
+    bool first_sample_logged_ = false;
     bool missing_metadata_warned_ = false;
     int startup_retry_count_ = 0;
     const int max_startup_retries_ = 2;
     std::chrono::steady_clock::time_point stream_started_at_{};
+    bool metadata_pad_linked_ = false;
+    std::chrono::steady_clock::time_point metadata_pad_linked_at_{};
     std::string pending_xml_fragment_;
 };

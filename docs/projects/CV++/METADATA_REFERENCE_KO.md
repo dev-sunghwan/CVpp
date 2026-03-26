@@ -1,7 +1,7 @@
 ﻿# CV++ 메타데이터 레퍼런스
 
 ## 문서 정보
-- 버전: `v0.2`
+- 버전: `v0.3`
 - 상태: `현재 parser taxonomy 기준으로 갱신됨`
 - 작성일: `2026-03-24`
 - 최종 수정일: `2026-03-25`
@@ -10,6 +10,27 @@
 ## 목적
 이 문서는 CV++가 현재 표시하는 parsed metadata 값이 무엇을 의미하는지 정리해서, SungHwan이 런타임 화면, recent metadata, 세션 로그를 일관된 기준으로 해석할 수 있게 하는 것을 목표로 한다.
 
+## 한눈에 보는 요약 표
+| 계층 | 무엇을 뜻하는가 | 현재 필드 / 값 | 예시 | 읽는 방법 |
+| --- | --- | --- | --- | --- |
+| 카메라 raw metadata | payload 안에 video analytics object data가 있는지 | `<tt:VideoAnalytics><tt:Frame>` 및 `<tt:Object ...>` block이 포함된 raw XML | object-bearing XML payload | 카메라가 event traffic만이 아니라 object metadata도 보냈다는 뜻이다. |
+| 카메라 raw metadata | 카메라가 부여한 tracked object ID | `ObjectId` | `169173`, `131951` | 같은 ID가 반복되면 같은 camera-side track의 반복 detection으로 본다. |
+| 카메라 raw metadata | normalization 전 카메라 class label | metadata 안의 raw type text | `Car`, `Human`, `Vehicle`, `Bus` | 카메라가 해당 객체를 어떻게 분류하려 했는지 보여준다. |
+| 카메라 raw metadata | 카메라가 준 likelihood / confidence | raw likelihood 값 | metadata 안의 `0.82`, 이후 표시되는 `82%` | 앱이 만든 confidence가 아니라 camera-side score다. |
+| 파서 출력 | 세션 관점 parse 분류 | `status` | `success`, `malformed-payload`, `no-objects`, `unknown-pattern` | 이번 payload가 clean하게 끝났는지, fragmented로 남았는지, object가 없었는지, parser coverage gap이 있었는지를 보여준다. |
+| 파서 출력 | fragment / recovery 설명 | `message` | `clean-object-payload`, `truncated-object-fragment`, `recovered-continuation`, `metadata-without-objects` | parser가 현재 어떤 payload condition을 보고 있다고 판단하는지 설명한다. |
+| 파서 출력 | 정규화된 object identifier | `id` | `169173` | 보통 camera `ObjectId`와 직접 대응된다. |
+| 파서 출력 | 정규화된 object class | `type` | `Car`, `Human`, `Vehicle`, `Bicycle`, `Unknown` | overlay, metrics, review UI에서 사용하는 parser-normalized class다. |
+| 파서 출력 | operator-facing confidence 표시값 | `score` | `85%` | summary와 overlay에서 쓰는 camera likelihood의 percent 형태다. |
+| 런타임 / UI | compact operator summary | recent metadata summary line | `success | recovered-continuation | objects=9 | Car #169173 (85%)` | raw XML을 열지 않고도 현재 상황을 가장 빠르게 읽는 줄이다. |
+
+## 빠른 상황별 예시
+| 상황 | 카메라 raw 측면 | 파서 측면 | 실무적 의미 |
+| --- | --- | --- | --- |
+| object metadata가 clean하게 도착 | object-bearing XML payload | `status=success`, `message=clean-object-payload` | 가장 이상적인 object payload 상태이며, overlay와 metrics 근거로 강하다. |
+| object metadata가 fragment되었지만 유용함 | fragmented XML / continuation chain | `status=malformed-payload`, `message=recovered-continuation`, `objects>0` | payload가 완전히 clean하지 않아도 metadata는 실제로 존재했고 실무적으로 유효했다는 뜻이다. |
+| object 없는 metadata 도착 | event-only 또는 non-object metadata | `status=no-objects`, `message=metadata-without-objects` | metadata traffic은 있었지만 overlay할 object block은 없었다는 뜻이다. |
+| object block이 중간에서 끊김 | truncated object fragment | `status=malformed-payload`, `message=truncated-object-fragment` | transport fragmentation이 object payload를 block 중간에서 끊었다는 뜻이다. |
 ## Parsing Status 값
 ### `success`
 의미:
@@ -177,3 +198,4 @@
 - raw XML field와 parsed runtime field의 대응 관계 정리
 - Qt shell에서 parser-health category count를 직접 노출
 - raw camera label이 어떤 과정을 거쳐 normalized runtime label이 되는지 문서화
+

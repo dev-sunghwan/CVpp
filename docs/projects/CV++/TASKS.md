@@ -1,10 +1,10 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v1.1`
-- Status: `Milestone 3 active; thermal metadata future track added`
+- Version: `v1.3`
+- Status: `Milestone 3 active; ONVIF pipeline validated on profile4/profile2 smoke; daytime operator validation pending`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-25`
+- Last Updated: `2026-03-26`
 - Owner: `Software Engineer Agent`
 
 ## Change History
@@ -21,9 +21,11 @@
 | 2026-03-24 | v0.9 | Completed the first live Qt verification shell slice and narrowed the next step to Qt polish plus SQLite preparation. |
 | 2026-03-25 | v1.0 | Added Hanwha metadata baseline analysis and SQLite storage requirements docs, and narrowed the next step to parser-health visibility plus SQLite foundation work. |
 | 2026-03-25 | v1.1 | Added a deferred future milestone for thermal camera metadata validation. |
+| 2026-03-25 | v1.2 | Documented the interim ONVIF metadata pipeline finding and added the remaining app-level verification step. |
+| 2026-03-26 | v1.3 | Validated the ONVIF-aware metadata path on profile4 and profile2 smoke runs and added startup-stability follow-up work. |
 
 ## Summary
-The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The next milestone should make metadata evidence, parser health, and metadata performance directly visible to the user.
+The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The active milestone remains metadata evidence and performance visibility, but the metadata transport baseline is now much clearer.
 
 ## Milestone 1: Minimal Runtime Skeleton
 Status: completed.
@@ -45,14 +47,12 @@ Completed work:
 - optional real-session fixture candidate capture is supported through `config.toml`
 - normal shutdown logs RTSP methods and confirms `PAUSE` plus `TEARDOWN`
 - `metadata_probe` was added as a control experiment for camera behavior
-- the app metadata session now consumes the selected auxiliary video track instead of selecting and dropping it
 - fragmented metadata handling was improved enough to recover multi-object parsing in live sessions
 - live runs now show simultaneous multi-object overlays again
 
 Current verified outcome:
 - both `profile2` and `profile4` can produce object-bearing metadata
 - the app can parse and display multiple simultaneous objects
-- recent sessions contain meaningful `Car`, `Human`, and `Bicycle` detections
 - the earlier profile-specific metadata conclusion has been corrected
 
 ## Milestone 3: Metadata Evidence and Performance Visibility
@@ -76,17 +76,28 @@ Completed in the first vertical slice:
 - started tracking raw payload count, parsed payload count, malformed payload count, and event-only payload count in shared runtime state
 - replaced the OSD-first view with a minimal verification layout: video on the left, evidence and metadata panels on the right
 - added a runtime connection setup UI for IP, username, password, and profile input
-- completed a first live Qt shell slice that can connect, show video, render overlay labels, and update evidence / metrics / recent metadata panels from the shared runtime state
+- completed a first live Qt shell slice that can connect, show video, render overlay labels, and update evidence, metrics, and recent metadata panels from the shared runtime state
 
-Completed in the current analysis/documentation slice:
+Completed in the current analysis and transport slice:
 - documented the current Hanwha metadata baseline from saved sessions, including parser-health ratios, stable class baseline, and parser-noise observations
 - documented the minimal SQLite storage requirements needed to turn session logs into local review data without replacing the raw log flow
 - aligned metadata analysis docs with the current parser taxonomy: `truncated-object-fragment`, `recovered-continuation`, and `metadata-without-objects`
+- verified with `metadata_probe` that an RTP-aware ONVIF metadata path (`rtpjitterbuffer -> rtponvifmetadatadepay -> appsink`) materially reduces malformed payloads compared with the old raw-RTP appsink path
+- validated the ONVIF-aware metadata path in fresh full-app `profile4` and `profile2` smoke runs
+- moved `MetadataRtspSession` to metadata-only selection so profile behavior is treated as a startup-stability question, not a metadata-semantics question
+- introduced first-frame delay and link-aware metadata watchdog logic to reduce delayed overlay startup risk
+
+Current verified outcome:
+- `profile4` full-app smoke can reach `application/x-onvif-metadata` and clean parse results with `malformed-payload=0`
+- `profile2` smoke can also reach `application/x-onvif-metadata` and clean parse results with `malformed-payload=0`
+- parser-noise labels did not appear in the validated clean ONVIF-path smoke sessions
 
 Next step inside Milestone 3:
 - surface parser-health counts in the Qt shell using the current taxonomy
-- make parser-noise labels visible in forensic views but grouped away from headline metrics
-- keep session summaries aligned with the new baseline docs so later SQLite ingestion can stay mechanical
+- reduce video-session startup retries further so startup latency is more repeatable
+- package the current nighttime nonvisual smoke verification into a repeatable procedure
+- keep session summaries aligned with the baseline docs so later SQLite ingestion can stay mechanical
+- do a daytime object-rich validation pass for overlay responsiveness and operator confidence
 
 Done when:
 - the app exposes evidence state without requiring manual log inspection
@@ -128,13 +139,10 @@ Tasks:
 - replace the current right-side panel rendering with Qt widgets for evidence, metrics, and recent metadata
 - preserve the current verification workflow while improving readability, DPI handling, and layout quality
 
-Completed in the first scaffold slice:
+Completed work:
 - installed Qt 6.8.3 MSVC 2022 64-bit locally
 - added a separate `CVPP_QtShell` target to the build
 - created a minimal Qt shell with a connection form area and a verification layout placeholder
-- kept the current runtime core untouched while preparing the next UI layer
-
-Completed in the second scaffold slice:
 - wired the Qt connection form to runtime-backed session startup
 - connected the Qt shell to `VideoRtspSession`, `MetadataRtspSession`, and `SharedAppState`
 - replaced the video placeholder with a live runtime frame surface and overlay preview
@@ -177,12 +185,13 @@ Tasks:
 
 Start condition:
 - begin only after the current Milestone 3 and Milestone 8 foundations are stable enough that thermal work does not blur the current observability baseline
+
 ## Key Concerns
-- Avoid a large refactor before observability is working.
-- Do not build a polished UI before raw metadata evidence is trustworthy.
-- Keep each milestone independently runnable.
-- Use `metadata_probe` as the control experiment before drawing conclusions from the full app.
-- Keep the implementation learnable enough that SungHwan can use the project to build practical C++ understanding.
+- avoid a large refactor before observability is working
+- do not build a polished UI before raw metadata evidence is trustworthy
+- keep each milestone independently runnable
+- use `metadata_probe` as the control experiment before drawing conclusions from the full app
+- keep the implementation learnable enough that SungHwan can use the project to build practical C++ understanding
 
 ## Resolved Decisions
 - default log path strategy: session-based runtime output folders under `output/session-YYYYMMDD-HHMMSS/`
@@ -198,6 +207,6 @@ Start condition:
 - `docs/projects/CV++/MILESTONE_REVIEW.md`
 - `docs/projects/CV++/SQLITE_STORAGE_REQUIREMENTS.md`
 - `docs/projects/CV++/MESSAGE_INVESTIGATION.md`
+- `docs/projects/CV++/ONVIF_METADATA_PIPELINE_INVESTIGATION.md`
 - `docs/projects/CV++/METADATA_REFERENCE.md`
 - `docs/projects/CV++/CPP_LEARNING_GUIDE.md`
-

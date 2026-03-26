@@ -1,10 +1,10 @@
 ﻿# CV++ 작업 계획
 
 ## 문서 정보
-- 버전: `v1.1`
-- 상태: `마일스톤 3 진행 중, thermal metadata 미래 트랙 추가`
+- 버전: `v1.3`
+- 상태: `마일스톤 3 진행 중, ONVIF 파이프라인이 profile4/profile2 smoke 기준 검증되었고 주간 operator 검증만 남음`
 - 작성일: `2026-03-18`
-- 최종 수정일: `2026-03-25`
+- 최종 수정일: `2026-03-26`
 - 작성 주체: `Software Engineer Agent`
 
 ## 변경 이력
@@ -21,9 +21,11 @@
 | 2026-03-24 | v0.9 | 첫 live Qt verification shell slice를 완료하고, 다음 단계를 Qt polish와 SQLite 준비로 좁힘 |
 | 2026-03-25 | v1.0 | Hanwha metadata baseline 분석 문서와 SQLite 저장 요구사항 문서를 추가하고, 다음 단계를 parser-health visibility와 SQLite foundation 작업으로 좁힘 |
 | 2026-03-25 | v1.1 | thermal camera metadata 검증을 위한 deferred future milestone을 추가 |
+| 2026-03-25 | v1.2 | ONVIF metadata 파이프라인 중간 결론을 문서화하고, 남은 앱 레벨 검증 단계를 추가 |
+| 2026-03-26 | v1.3 | ONVIF-aware metadata path를 profile4/profile2 smoke 기준으로 검증하고 startup-stability 후속 작업을 반영 |
 
 ## 요약
-프로젝트는 초기 RTSP bring-up 단계를 넘어섰다. 현재 기준선은 video 수신, metadata 수집, 다중 객체 파싱, 다중 객체 overlay까지 가능하다. 다음 마일스톤은 사용자가 metadata evidence, parser health, metadata performance를 직접 판단할 수 있게 만드는 데 집중해야 한다.
+프로젝트는 초기 RTSP bring-up 단계를 넘어섰다. 현재 기준선은 video 수신, metadata 수집, 다중 객체 파싱, 다중 객체 overlay까지 가능하다. 현재 active milestone은 metadata evidence, parser health, metadata performance를 사용자가 직접 판단할 수 있게 만드는 일이며, metadata transport baseline은 훨씬 더 명확해졌다.
 
 ## 마일스톤 1: 최소 런타임 골격
 상태: 완료.
@@ -45,15 +47,13 @@
 - `config.toml`로 실제 세션 fixture candidate 저장 가능
 - 정상 종료 시 RTSP method를 기록하고 `PAUSE`, `TEARDOWN` 확인 가능
 - 카메라 동작 검증용 `metadata_probe` 추가
-- app metadata session이 선택한 auxiliary video track을 실제 소비하도록 수정
-- fragment된 metadata 처리 개선으로 live 세션에서 multi-object parsing 복구
+- fragmented metadata 처리 개선으로 live 세션에서 multi-object parsing 복구
 - live 실행에서 동시에 여러 객체 overlay가 다시 표시됨
 
 현재 확인된 결과:
 - `profile2`, `profile4` 모두 object-bearing metadata를 생성할 수 있음
 - 앱은 동시에 여러 객체를 파싱하고 표시할 수 있음
-- 최근 세션에서 `Car`, `Human`, `Bicycle`가 의미 있게 감지됨
-- 기존의 profile별 metadata 동작 차이 결론은 정정됨
+- 기존의 profile별 metadata 의미 차이 결론은 정정됨
 
 ## 마일스톤 3: Metadata Evidence 및 Performance Visibility
 상태: 진행 중.
@@ -76,17 +76,29 @@
 - shared runtime state에서 raw payload count, parsed payload count, malformed payload count, event-only payload count 추적 시작
 - OSD-first view를 최소 verification layout으로 교체: 왼쪽 video, 오른쪽 evidence/metadata panel
 - IP, username, password, profile 입력용 runtime connection setup UI 추가
-- 연결, video 표시, overlay label 렌더링, evidence / metrics / recent metadata panel 업데이트가 가능한 첫 live Qt shell slice 완료
+- 연결, video 표시, overlay label 렌더링, evidence, metrics, recent metadata panel 업데이트가 가능한 첫 live Qt shell slice 완료
 
-현재 analysis/documentation slice에서 완료된 작업:
+현재 analysis 및 transport slice에서 완료된 작업:
 - 저장 세션을 기준으로 현재 Hanwha metadata baseline을 문서화했고, parser-health ratio, stable class baseline, parser-noise observation을 정리함
 - session log를 local review data로 바꾸는 데 필요한 최소 SQLite 저장 요구사항을 문서화함
 - metadata analysis 문서를 현재 parser taxonomy인 `truncated-object-fragment`, `recovered-continuation`, `metadata-without-objects` 기준으로 정렬함
+- `metadata_probe`로 RTP-aware ONVIF metadata 경로(`rtpjitterbuffer -> rtponvifmetadatadepay -> appsink`)를 검증했고, 기존 raw-RTP appsink 경로 대비 probe 기준 malformed payload가 크게 줄어드는 결과를 확인함
+- fresh full-app `profile4`와 `profile2` smoke run에서 ONVIF-aware metadata path가 clean parse를 만드는지 확인함
+- `MetadataRtspSession`을 metadata-only selection으로 정리해서 profile 차이를 metadata semantics가 아니라 startup stability 관점으로 다루도록 방향을 고정함
+- first-frame settle delay와 link-aware metadata watchdog를 넣어서 delayed overlay startup risk를 줄이는 방향으로 조정함
 
-Milestone 3 안에서의 다음 단계:
-- 현재 taxonomy를 사용해 Qt shell에 parser-health count 노출
-- parser-noise label은 forensic view에는 보이되, headline metric에서는 별도 그룹으로 묶기
-- 이후 SQLite ingestion이 기계적으로 가능하도록 session summary 형식을 새 baseline 문서와 맞추기
+현재 확인된 결과:
+- `profile4` full-app smoke는 `application/x-onvif-metadata`와 clean parse 결과에 도달할 수 있음
+- `profile2` smoke도 `application/x-onvif-metadata`와 clean parse 결과에 도달할 수 있음
+- clean ONVIF-path smoke 세션에서는 parser-noise label이 관측되지 않았음
+- `profile2`와 `profile4`는 metadata 의미 차이가 아니라 startup 안정성 관점에서만 다뤄야 한다는 점이 더 분명해짐
+
+다음 단계:
+- Qt shell에 parser-health count를 노출
+- video session 쪽 startup retry를 더 줄여 전체 bring-up을 더 반복 가능하게 만들기
+- 현재 야간 nonvisual smoke verification을 작은 반복 절차로 정리
+- 주간 object-rich scene에서 overlay responsiveness와 operator confidence를 최종 확인
+- 이후 SQLite ingestion이 기계적으로 가능하도록 session summary 형식을 baseline 문서와 계속 맞추기
 
 완료 기준:
 - 앱이 manual log inspection 없이 evidence 상태를 노출한다
@@ -128,19 +140,14 @@ Milestone 3 안에서의 다음 단계:
 - 현재 오른쪽 panel 렌더링을 Qt widget 기반 evidence, metrics, recent metadata panel로 교체
 - 현재 verification workflow를 유지하면서 readability, DPI handling, layout quality를 개선
 
-첫 scaffold slice에서 완료된 작업:
-- 로컬에 Qt 6.8.3 MSVC 2022 64-bit 설치
+완료된 작업:
+- Qt 6.8.3 MSVC 2022 64-bit 설치
 - build에 별도 `CVPP_QtShell` target 추가
-- connection form 영역과 verification layout placeholder를 가진 최소 Qt shell 생성
-- 현재 runtime core는 건드리지 않고 다음 UI layer 준비
+- 최소 Qt shell 생성 및 runtime-backed session startup 연결
+- live runtime frame surface, overlay preview, evidence, metrics, recent metadata panel 업데이트 연결
+- main app과 같은 metadata-start 안정화 로직을 Qt shell에도 반영
 
-두 번째 scaffold slice에서 완료된 작업:
-- Qt connection form을 runtime-backed session startup에 연결
-- Qt shell을 `VideoRtspSession`, `MetadataRtspSession`, `SharedAppState`에 연결
-- video placeholder를 live runtime frame surface와 overlay preview로 교체
-- evidence, metrics, recent metadata panel이 shared runtime state에서 업데이트되도록 연결
-
-Qt 전환 안에서의 다음 단계:
+다음 단계:
 - connection UX와 state messaging 개선
 - panel density와 visual hierarchy 조정
 - Qt shell을 main operator surface로 검증하는 동안 OpenCV view는 fallback으로만 유지
@@ -177,6 +184,7 @@ planning 단계에서 완료된 작업:
 
 시작 조건:
 - 현재 Milestone 3와 Milestone 8 기반이 충분히 안정화되어, thermal 작업이 현재 observability 기준선을 흐리지 않을 때 시작
+
 ## 핵심 우려
 - observability가 제대로 작동하기 전에 큰 refactor를 하지 말 것
 - raw metadata evidence가 충분히 신뢰되기 전에 polished UI를 먼저 만들지 말 것
@@ -198,6 +206,6 @@ planning 단계에서 완료된 작업:
 - `docs/projects/CV++/MILESTONE_REVIEW.md`
 - `docs/projects/CV++/SQLITE_STORAGE_REQUIREMENTS.md`
 - `docs/projects/CV++/MESSAGE_INVESTIGATION.md`
+- `docs/projects/CV++/ONVIF_METADATA_PIPELINE_INVESTIGATION.md`
 - `docs/projects/CV++/METADATA_REFERENCE.md`
 - `docs/projects/CV++/CPP_LEARNING_GUIDE.md`
-

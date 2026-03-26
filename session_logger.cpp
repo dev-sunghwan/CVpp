@@ -16,7 +16,7 @@ std::string timestamp_for_path() {
 #ifdef _WIN32
     localtime_s(&local_time, &time_value);
 #else
-    localtime_r(&time_value, &local_time);
+    localtime_r(&local_time, &time_value);
 #endif
     std::ostringstream stream;
     stream << std::put_time(&local_time, "%Y%m%d-%H%M%S");
@@ -30,7 +30,7 @@ std::string timestamp_for_log() {
 #ifdef _WIN32
     localtime_s(&local_time, &time_value);
 #else
-    localtime_r(&time_value, &local_time);
+    localtime_r(&local_time, &time_value);
 #endif
     std::ostringstream stream;
     stream << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
@@ -40,7 +40,12 @@ std::string timestamp_for_log() {
 
 bool SessionLogger::initialize(const std::string& output_root, std::string& error_message) {
     try {
-        std::filesystem::path session_path = std::filesystem::path(output_root) / ("session-" + timestamp_for_path());
+        const std::filesystem::path working_dir = std::filesystem::current_path();
+        const std::filesystem::path configured_output_root(output_root);
+        const std::filesystem::path resolved_output_root = configured_output_root.is_absolute()
+            ? configured_output_root
+            : (working_dir / configured_output_root);
+        std::filesystem::path session_path = resolved_output_root / ("session-" + timestamp_for_path());
         std::filesystem::create_directories(session_path);
 
         session_dir_ = session_path.string();
@@ -61,6 +66,8 @@ bool SessionLogger::initialize(const std::string& output_root, std::string& erro
     }
 
     log_event("Session started");
+    log_event(std::string("Session working directory: ") + std::filesystem::current_path().string());
+    log_event(std::string("Session output directory: ") + session_dir_);
     return true;
 }
 
@@ -112,3 +119,4 @@ bool SessionLogger::capture_fixture_candidate(const std::string& output_dir, int
         return false;
     }
 }
+

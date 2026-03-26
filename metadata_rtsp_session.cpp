@@ -50,12 +50,27 @@ bool MetadataRtspSession::start() {
 
     pipeline_ = gst_pipeline_new("metadata_pipeline");
     GstElement* rtspsrc = gst_element_factory_make("rtspsrc", "metadata_src");
+    meta_jitterbuffer_ = gst_element_factory_make("rtpjitterbuffer", "metadata_jitterbuffer");
+    meta_depay_ = gst_element_factory_make("rtponvifmetadatadepay", "metadata_depay");
     meta_sink_ = gst_element_factory_make("appsink", "meta_sink");
     video_sink_ = gst_element_factory_make("fakesink", "metadata_video_sink");
 
     if (!pipeline_ || !rtspsrc || !meta_sink_ || !video_sink_) {
         logger_.log_event("MetadataSession: failed to create GStreamer elements");
         return false;
+    }
+
+    const bool use_metadata_depay = meta_jitterbuffer_ && meta_depay_;
+    if (!use_metadata_depay) {
+        logger_.log_event("MetadataSession: rtponvifmetadatadepay path unavailable; falling back to raw RTP metadata samples");
+        if (meta_jitterbuffer_) {
+            gst_object_unref(meta_jitterbuffer_);
+            meta_jitterbuffer_ = nullptr;
+        }
+        if (meta_depay_) {
+            gst_object_unref(meta_depay_);
+            meta_depay_ = nullptr;
+        }
     }
 
     g_object_set(G_OBJECT(rtspsrc),
@@ -69,7 +84,17 @@ bool MetadataRtspSession::start() {
     g_object_set(G_OBJECT(meta_sink_), "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
     g_object_set(G_OBJECT(video_sink_), "sync", FALSE, "async", FALSE, NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline_), rtspsrc, meta_sink_, video_sink_, NULL);
+    if (use_metadata_depay) {
+        gst_bin_add_many(GST_BIN(pipeline_), rtspsrc, meta_jitterbuffer_, meta_depay_, meta_sink_, video_sink_, NULL);
+        if (!gst_element_link(meta_jitterbuffer_, meta_depay_) || !gst_element_link(meta_depay_, meta_sink_)) {
+            logger_.log_event("MetadataSession: failed to link RTP metadata depay path");
+            return false;
+        }
+        logger_.log_event("MetadataSession: using RTP jitterbuffer + ONVIF metadata depay path");
+    } else {
+        gst_bin_add_many(GST_BIN(pipeline_), rtspsrc, meta_sink_, video_sink_, NULL);
+    }
+
     g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(MetadataRtspSession::on_src_pad_added), this);
     g_signal_connect(meta_sink_, "new-sample", G_CALLBACK(MetadataRtspSession::on_new_meta_sample), this);
 
@@ -79,10 +104,12 @@ bool MetadataRtspSession::start() {
         logger_.log_event("MetadataSession: failed to change pipeline state to PLAYING");
         return false;
     }
-
     metadata_sample_count_ = 0;
     missing_metadata_warned_ = false;
     startup_retry_count_ = 0;
+    metadata_pad_linked_ = false;
+    metadata_pad_linked_at_ = std::chrono::steady_clock::time_point{};
+    pending_xml_fragment_.clear();
     stream_started_at_ = std::chrono::steady_clock::now();
     return true;
 }
@@ -107,6 +134,8 @@ void MetadataRtspSession::stop() {
 
     gst_object_unref(pipeline_);
     pipeline_ = nullptr;
+    meta_jitterbuffer_ = nullptr;
+    meta_depay_ = nullptr;
     meta_sink_ = nullptr;
     video_sink_ = nullptr;
 }
@@ -125,14 +154,23 @@ void MetadataRtspSession::poll_bus_once(GstClockTime timeout) {
     gst_object_unref(bus);
 
     const auto now = std::chrono::steady_clock::now();
-    if (!missing_metadata_warned_ && metadata_sample_count_ == 0 &&
-        std::chrono::duration_cast<std::chrono::seconds>(now - stream_started_at_).count() >= 8) {
-        logger_.log_event("MetadataSession: no metadata samples received within 8 seconds");
+    const auto overall_elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - stream_started_at_).count();
+    const auto linked_elapsed = metadata_pad_linked_
+        ? std::chrono::duration_cast<std::chrono::seconds>(now - metadata_pad_linked_at_).count()
+        : -1;
+    const bool no_pad_link = !metadata_pad_linked_ && overall_elapsed >= 15;
+    const bool no_samples_after_link = metadata_pad_linked_ && metadata_sample_count_ == 0 && linked_elapsed >= 8;
+
+    if (!missing_metadata_warned_ && metadata_sample_count_ == 0 && (no_pad_link || no_samples_after_link)) {
+        if (no_pad_link) {
+            logger_.log_event("MetadataSession: no metadata pad linked within 15 seconds");
+        } else {
+            logger_.log_event("MetadataSession: no metadata samples received within 8 seconds after pad link");
+        }
         missing_metadata_warned_ = true;
         restart_after_startup_timeout();
     }
 }
-
 bool MetadataRtspSession::restart_after_startup_timeout() {
     if (startup_retry_count_ >= max_startup_retries_) {
         logger_.log_event("MetadataSession: startup watchdog retries exhausted; keeping pipeline running for manual inspection");
@@ -158,6 +196,9 @@ bool MetadataRtspSession::restart_after_startup_timeout() {
 
     metadata_sample_count_ = 0;
     missing_metadata_warned_ = false;
+    metadata_pad_linked_ = false;
+    metadata_pad_linked_at_ = std::chrono::steady_clock::time_point{};
+    pending_xml_fragment_.clear();
     {
         std::lock_guard<std::mutex> lock(state_.meta_mutex);
         state_.current_objects.clear();
@@ -175,7 +216,6 @@ bool MetadataRtspSession::restart_after_startup_timeout() {
     stream_started_at_ = std::chrono::steady_clock::now();
     return true;
 }
-
 void MetadataRtspSession::log_bus_message(GstMessage* msg) {
     GError* err = nullptr;
     gchar* dbg = nullptr;
@@ -246,7 +286,6 @@ gboolean MetadataRtspSession::on_before_send(GstElement*, GstRTSPMessage* messag
     }
     return TRUE;
 }
-
 void MetadataRtspSession::on_src_pad_added(GstElement*, GstPad* new_pad, gpointer user_data) {
     auto* self = static_cast<MetadataRtspSession*>(user_data);
     GstCaps* caps = gst_pad_get_current_caps(new_pad);
@@ -263,37 +302,41 @@ void MetadataRtspSession::on_src_pad_added(GstElement*, GstPad* new_pad, gpointe
 
     if (media_str == "application" &&
         (encoding_str == "vnd.onvif.metadata" || encoding_str == "VND.ONVIF.METADATA")) {
-        GstPad* sink_pad = gst_element_get_static_pad(self->meta_sink_, "sink");
+        GstElement* metadata_target = self->meta_jitterbuffer_ ? self->meta_jitterbuffer_ : self->meta_sink_;
+        GstPad* sink_pad = gst_element_get_static_pad(metadata_target, "sink");
         if (!gst_pad_is_linked(sink_pad)) {
             GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
             if (link_result == GST_PAD_LINK_OK) {
-                self->logger_.log_event(std::string("MetadataSession: linked metadata pad | caps=") + caps_text);
+                self->metadata_pad_linked_ = true;
+                self->metadata_pad_linked_at_ = std::chrono::steady_clock::now();
+                if (self->meta_jitterbuffer_) {
+                    self->logger_.log_event(std::string("MetadataSession: linked metadata RTP pad to jitterbuffer | caps=") + caps_text);
+                } else {
+                    self->logger_.log_event(std::string("MetadataSession: linked metadata pad | caps=") + caps_text);
+                }
             } else {
                 self->logger_.log_event(std::string("MetadataSession: failed to link metadata pad: ") + gst_pad_link_get_name(link_result));
             }
         }
         gst_object_unref(sink_pad);
     } else if (media_str == "video") {
-        GstPad* sink_pad = gst_element_get_static_pad(self->video_sink_, "sink");
-        if (!gst_pad_is_linked(sink_pad)) {
-            GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
-            if (link_result == GST_PAD_LINK_OK) {
-                self->logger_.log_event(std::string("MetadataSession: linked auxiliary video pad | caps=") + caps_text);
-            } else {
-                self->logger_.log_event(std::string("MetadataSession: failed to link auxiliary video pad: ") + gst_pad_link_get_name(link_result));
-            }
-        }
-        gst_object_unref(sink_pad);
+        self->logger_.log_event(std::string("MetadataSession: ignoring auxiliary video pad | caps=") + caps_text);
     }
 
     gst_caps_unref(caps);
 }
-
 GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer user_data) {
     auto* self = static_cast<MetadataRtspSession*>(user_data);
     GstSample* sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if (!sample) {
         return GST_FLOW_ERROR;
+    }
+
+    if (self->metadata_sample_count_ == 0) {
+        GstCaps* sample_caps = gst_sample_get_caps(sample);
+        if (sample_caps) {
+            self->logger_.log_event(std::string("MetadataSession: first appsink sample caps=") + self->caps_to_string(sample_caps));
+        }
     }
 
     GstBuffer* buffer = gst_sample_get_buffer(sample);
@@ -323,7 +366,7 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
         const bool has_video_analytics = contains_video_analytics_frame(xml_str);
         const bool has_objects = contains_object_blocks(xml_str);
 
-        MetadataParseResult parse_result = parse_onvif_xml(xml_str);
+        MetadataParseResult parse_result = parse_onvif_xml(xml_str, from_pending);
         std::string summary = std::string("status=") + parse_status_label(parse_result.status) +
                               " message=\"" + parse_result.message + "\" " +
                               summarize_objects(parse_result.objects);
@@ -432,8 +475,7 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     std::string encoding_str = encoding_name ? encoding_name : "unknown";
     const bool is_metadata = media_str == "application" &&
                              (encoding_str == "VND.ONVIF.METADATA" || encoding_str == "vnd.onvif.metadata");
-    const bool is_video = media_str == "video";
-    const bool select = is_video || is_metadata;
+    const bool select = is_metadata;
 
     std::ostringstream text;
     text << "MetadataSession: select-stream index=" << stream_index
@@ -443,5 +485,12 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     self->logger_.log_event(text.str());
     return select;
 }
+
+
+
+
+
+
+
 
 

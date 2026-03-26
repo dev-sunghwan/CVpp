@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <chrono>
 #include <memory>
@@ -66,4 +66,5 @@ private:
     bool metadata_started_ = false;
     bool runtime_active_ = false;
     std::chrono::steady_clock::time_point runtime_started_at_{};
+    std::chrono::steady_clock::time_point video_ready_since_{};
 };

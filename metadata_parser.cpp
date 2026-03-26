@@ -1,11 +1,51 @@
 ﻿#include "metadata_parser.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <regex>
 #include <sstream>
 
 namespace {
+int bounded_edit_distance(const std::string& a, const std::string& b, int max_distance) {
+    const size_t a_size = a.size();
+    const size_t b_size = b.size();
+    if (std::max(a_size, b_size) - std::min(a_size, b_size) > static_cast<size_t>(max_distance)) {
+        return max_distance + 1;
+    }
+
+    std::vector<int> previous(b_size + 1);
+    std::vector<int> current(b_size + 1);
+    for (size_t j = 0; j <= b_size; ++j) {
+        previous[j] = static_cast<int>(j);
+    }
+
+    for (size_t i = 1; i <= a_size; ++i) {
+        current[0] = static_cast<int>(i);
+        int row_min = current[0];
+        for (size_t j = 1; j <= b_size; ++j) {
+            const int substitution_cost = a[i - 1] == b[j - 1] ? 0 : 1;
+            current[j] = std::min({
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + substitution_cost
+            });
+            row_min = std::min(row_min, current[j]);
+        }
+
+        if (row_min > max_distance) {
+            return max_distance + 1;
+        }
+        previous.swap(current);
+    }
+
+    return previous[b_size];
+}
+
+bool is_near_label(const std::string& candidate, const std::string& target, int max_distance) {
+    return bounded_edit_distance(candidate, target, max_distance) <= max_distance;
+}
+
 std::string normalize_type_label(const std::string& raw) {
     if (raw.empty()) {
         return "Unknown";
@@ -35,10 +75,47 @@ std::string normalize_type_label(const std::string& raw) {
         return "Vehicle";
     }
 
-    if (!letters_only.empty()) {
-        std::string cleaned = letters_only;
-        cleaned[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(cleaned[0])));
-        return cleaned;
+    static const std::array<std::pair<const char*, const char*>, 9> canonical_labels = {{
+        {"car", "Car"},
+        {"human", "Human"},
+        {"vehicle", "Vehicle"},
+        {"bicycle", "Bicycle"},
+        {"head", "Head"},
+        {"bus", "Bus"},
+        {"truck", "Truck"},
+        {"motorcycle", "Motorcycle"},
+        {"unknown", "Unknown"},
+    }};
+
+    for (const auto& [candidate, normalized] : canonical_labels) {
+        if (letters_only == candidate) {
+            return normalized;
+        }
+    }
+
+    if (is_near_label(letters_only, "car", 1)) {
+        return "Car";
+    }
+    if (is_near_label(letters_only, "human", 2)) {
+        return "Human";
+    }
+    if (is_near_label(letters_only, "vehicle", 2) || is_near_label(letters_only, "vehical", 2)) {
+        return "Vehicle";
+    }
+    if (is_near_label(letters_only, "bicycle", 2)) {
+        return "Bicycle";
+    }
+    if (is_near_label(letters_only, "head", 1)) {
+        return "Head";
+    }
+    if (is_near_label(letters_only, "bus", 1)) {
+        return "Bus";
+    }
+    if (is_near_label(letters_only, "truck", 2)) {
+        return "Truck";
+    }
+    if (is_near_label(letters_only, "motorcycle", 2)) {
+        return "Motorcycle";
     }
 
     return "Unknown";
@@ -87,7 +164,7 @@ bool contains_object_blocks(const std::string& xml) {
     return xml.find("<tt:Object ObjectId=") != std::string::npos;
 }
 
-MetadataParseResult parse_onvif_xml(const std::string& xml) {
+MetadataParseResult parse_onvif_xml(const std::string& xml, bool from_continuation) {
     MetadataParseResult result;
 
     const std::string start_tag = "<tt:Object ObjectId=";
@@ -95,7 +172,7 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
 
     if (xml.find("<?xml") == std::string::npos) {
         result.status = ParseStatus::MalformedPayload;
-        result.message = "XML declaration not found";
+        result.message = "continuation-without-xml-start";
         return result;
     }
 
@@ -108,6 +185,7 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
 
     bool found_object_block = false;
     bool found_unknown_pattern = false;
+    bool found_partial_block = false;
     size_t pos = 0;
     while ((pos = xml.find(start_tag, pos)) != std::string::npos) {
         size_t end = xml.find(end_tag, pos);
@@ -164,8 +242,7 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
         }
 
         if (block_is_partial) {
-            result.status = ParseStatus::MalformedPayload;
-            result.message = "Object block did not close cleanly";
+            found_partial_block = true;
         }
 
         result.objects.push_back(obj);
@@ -175,21 +252,21 @@ MetadataParseResult parse_onvif_xml(const std::string& xml) {
         }
     }
 
-    if (!found_object_block) {
+    if (!found_object_block || result.objects.empty()) {
         result.status = ParseStatus::NoObjects;
-        result.message = "No <tt:Object> blocks found";
+        result.message = "metadata-without-objects";
         return result;
     }
 
-    if (result.objects.empty()) {
-        result.status = ParseStatus::NoObjects;
-        result.message = "No objects parsed";
+    if (found_partial_block) {
+        result.status = ParseStatus::MalformedPayload;
+        result.message = from_continuation ? "recovered-continuation" : "truncated-object-fragment";
         return result;
     }
 
-    if (result.status != ParseStatus::MalformedPayload) {
-        result.status = found_unknown_pattern ? ParseStatus::UnknownPattern : ParseStatus::Success;
-        result.message = found_unknown_pattern ? "Objects parsed but some class patterns were unknown" : "Objects parsed successfully";
-    }
+    result.status = found_unknown_pattern ? ParseStatus::UnknownPattern : ParseStatus::Success;
+    result.message = found_unknown_pattern
+        ? (from_continuation ? "recovered-continuation-with-unknown-patterns" : "clean-object-payload-with-unknown-patterns")
+        : (from_continuation ? "recovered-continuation" : "clean-object-payload");
     return result;
 }

@@ -26,6 +26,7 @@ const char* rtsp_method_label(GstRTSPMethod method) {
 
 struct ProbeOptions {
     bool include_video_track = false;
+    bool use_depay = true;
     int duration_seconds = 15;
 };
 
@@ -33,10 +34,14 @@ struct ProbeState {
     AppConfig config;
     ProbeOptions options;
     GstElement* meta_sink = nullptr;
+    GstElement* meta_jitterbuffer = nullptr;
+    GstElement* meta_depay = nullptr;
     int sample_count = 0;
     int object_payload_count = 0;
     int event_only_count = 0;
     int malformed_count = 0;
+    bool logged_sample_caps = false;
+    std::string pending_xml_fragment;
 };
 
 gboolean on_before_send(GstElement*, GstRTSPMessage* message, gpointer user_data) {
@@ -106,7 +111,8 @@ void on_src_pad_added(GstElement*, GstPad* new_pad, gpointer user_data) {
 
     if (media_str == "application" &&
         (encoding_str == "VND.ONVIF.METADATA" || encoding_str == "vnd.onvif.metadata")) {
-        GstPad* sink_pad = gst_element_get_static_pad(state->meta_sink, "sink");
+        GstElement* target = state->options.use_depay && state->meta_jitterbuffer ? state->meta_jitterbuffer : state->meta_sink;
+        GstPad* sink_pad = gst_element_get_static_pad(target, "sink");
         if (!gst_pad_is_linked(sink_pad)) {
             const GstPadLinkReturn link_result = gst_pad_link(new_pad, sink_pad);
             std::cout << "[PAD] metadata link result=" << gst_pad_link_get_name(link_result) << std::endl;
@@ -127,10 +133,46 @@ GstFlowReturn on_new_meta_sample(GstElement* sink, gpointer user_data) {
         return GST_FLOW_ERROR;
     }
 
+    if (!state->logged_sample_caps) {
+        GstCaps* sample_caps = gst_sample_get_caps(sample);
+        if (sample_caps) {
+            gchar* caps_text = gst_caps_to_string(sample_caps);
+            std::cout << "[META] appsink-caps=" << (caps_text ? caps_text : "<none>") << std::endl;
+            if (caps_text) {
+                g_free(caps_text);
+            }
+        }
+        state->logged_sample_caps = true;
+    }
+
     ++state->sample_count;
     GstBuffer* buffer = gst_sample_get_buffer(sample);
     GstMapInfo map;
     gst_buffer_map(buffer, &map, GST_MAP_READ);
+
+    auto process_xml = [&](const std::string& xml, bool from_pending) {
+        const bool has_video_analytics = contains_video_analytics_frame(xml);
+        MetadataParseResult parsed = parse_onvif_xml(xml, from_pending);
+        if (!parsed.objects.empty()) {
+            ++state->object_payload_count;
+        } else if (!has_video_analytics) {
+            ++state->event_only_count;
+        }
+        if (parsed.status == ParseStatus::MalformedPayload) {
+            ++state->malformed_count;
+            state->pending_xml_fragment = xml;
+        } else if (from_pending) {
+            state->pending_xml_fragment.clear();
+        }
+
+        if (state->sample_count <= 5 || !parsed.objects.empty()) {
+            std::cout << "[META] sample=" << state->sample_count
+                      << " status=" << parse_status_label(parsed.status)
+                      << " objects=" << parsed.objects.size()
+                      << " summary=" << summarize_objects(parsed.objects)
+                      << std::endl;
+        }
+    };
 
     const char* xml_start = nullptr;
     for (gsize i = 0; i + 4 < map.size; ++i) {
@@ -142,24 +184,10 @@ GstFlowReturn on_new_meta_sample(GstElement* sink, gpointer user_data) {
 
     if (xml_start) {
         std::string xml(xml_start, reinterpret_cast<const char*>(map.data + map.size));
-        const bool has_video_analytics = contains_video_analytics_frame(xml);
-        MetadataParseResult parsed = parse_onvif_xml(xml);
-        if (!parsed.objects.empty()) {
-            ++state->object_payload_count;
-        } else if (!has_video_analytics) {
-            ++state->event_only_count;
-        }
-        if (parsed.status == ParseStatus::MalformedPayload) {
-            ++state->malformed_count;
-        }
-
-        if (state->sample_count <= 5 || !parsed.objects.empty()) {
-            std::cout << "[META] sample=" << state->sample_count
-                      << " status=" << parse_status_label(parsed.status)
-                      << " objects=" << parsed.objects.size()
-                      << " summary=" << summarize_objects(parsed.objects)
-                      << std::endl;
-        }
+        process_xml(xml, false);
+    } else if (!state->pending_xml_fragment.empty()) {
+        state->pending_xml_fragment.append(reinterpret_cast<const char*>(map.data), reinterpret_cast<const char*>(map.data + map.size));
+        process_xml(state->pending_xml_fragment, true);
     } else {
         ++state->malformed_count;
         std::cout << "[META] sample=" << state->sample_count << " status=xml-start-not-found" << std::endl;
@@ -218,6 +246,8 @@ ProbeOptions parse_options(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--with-video") {
             options.include_video_track = true;
+        } else if (arg == "--raw-rtp") {
+            options.use_depay = false;
         } else if (arg.rfind("--seconds=", 0) == 0) {
             options.duration_seconds = std::max(1, std::stoi(arg.substr(10)));
         }
@@ -247,6 +277,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (options.use_depay) {
+        state.meta_jitterbuffer = gst_element_factory_make("rtpjitterbuffer", "probe_metadata_jitterbuffer");
+        state.meta_depay = gst_element_factory_make("rtponvifmetadatadepay", "probe_metadata_depay");
+        if (!state.meta_jitterbuffer || !state.meta_depay) {
+            std::cerr << "[ERROR] Failed to create RTP-aware ONVIF metadata depay path." << std::endl;
+            return 1;
+        }
+    }
+
     g_object_set(G_OBJECT(rtspsrc),
                  "location", config.rtsp_url.c_str(),
                  "latency", config.latency,
@@ -254,7 +293,17 @@ int main(int argc, char* argv[]) {
                  NULL);
     g_object_set(G_OBJECT(state.meta_sink), "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), rtspsrc, state.meta_sink, NULL);
+    if (options.use_depay) {
+        gst_bin_add_many(GST_BIN(pipeline), rtspsrc, state.meta_jitterbuffer, state.meta_depay, state.meta_sink, NULL);
+        if (!gst_element_link(state.meta_jitterbuffer, state.meta_depay) || !gst_element_link(state.meta_depay, state.meta_sink)) {
+            std::cerr << "[ERROR] Failed to link RTP-aware ONVIF metadata depay path." << std::endl;
+            gst_object_unref(pipeline);
+            return 1;
+        }
+    } else {
+        gst_bin_add_many(GST_BIN(pipeline), rtspsrc, state.meta_sink, NULL);
+    }
+
     g_signal_connect(rtspsrc, "before-send", G_CALLBACK(on_before_send), &state);
     g_signal_connect(rtspsrc, "select-stream", G_CALLBACK(on_select_stream), &state);
     g_signal_connect(rtspsrc, "pad-added", G_CALLBACK(on_src_pad_added), &state);
@@ -262,6 +311,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[PROBE] url=" << config.rtsp_url << std::endl;
     std::cout << "[PROBE] mode=" << (options.include_video_track ? "metadata-with-video" : "metadata-only") << std::endl;
+    std::cout << "[PROBE] metadata-path=" << (options.use_depay ? "jitterbuffer+depay" : "raw-rtp") << std::endl;
     std::cout << "[PROBE] duration=" << options.duration_seconds << "s" << std::endl;
 
     if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
@@ -291,4 +341,3 @@ int main(int argc, char* argv[]) {
               << std::endl;
     return 0;
 }
-
