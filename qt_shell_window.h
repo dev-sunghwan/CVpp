@@ -33,6 +33,7 @@ protected:
 
 private:
     QWidget* buildConnectionPanel();
+    QWidget* buildOperatorStatePanel(QWidget* parent = nullptr);
     QWidget* buildVerificationPanel();
 
     void loadDefaultsFromConfig();
@@ -53,7 +54,9 @@ private:
     QLabel* stream_placeholder_ = nullptr;
     QLabel* connection_summary_ = nullptr;
     QLabel* status_badge_ = nullptr;
+    QTableWidget* readiness_table_ = nullptr;
     QTableWidget* evidence_table_ = nullptr;
+    QTableWidget* parser_health_table_ = nullptr;
     QTableWidget* metrics_table_ = nullptr;
     QListWidget* recent_metadata_list_ = nullptr;
     QTimer* poll_timer_ = nullptr;
@@ -68,3 +71,5 @@ private:
     std::chrono::steady_clock::time_point runtime_started_at_{};
     std::chrono::steady_clock::time_point video_ready_since_{};
 };
+
+

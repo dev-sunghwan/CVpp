@@ -20,6 +20,35 @@ const char* rtsp_method_label(GstRTSPMethod method) {
         default: return "UNKNOWN";
     }
 }
+
+void record_parser_health(ParserHealthCounts& counts, ParseStatus status, const std::string& message) {
+    if (message == "metadata-without-objects" || status == ParseStatus::NoObjects) {
+        ++counts.metadata_without_objects;
+        return;
+    }
+
+    if (message == "continuation-without-xml-start") {
+        ++counts.continuation_chunks;
+        return;
+    }
+
+    if (message == "truncated-object-fragment") {
+        ++counts.fragmented_object_payloads;
+        return;
+    }
+
+    if (status == ParseStatus::UnknownPattern || message.find("unknown-patterns") != std::string::npos) {
+        ++counts.unknown_object_patterns;
+        return;
+    }
+
+    if (message.rfind("recovered-continuation", 0) == 0) {
+        ++counts.recovered_continuations;
+        return;
+    }
+
+    ++counts.clean_object_payloads;
+}
 }
 
 MetadataRtspSession::MetadataRtspSession(const AppConfig& config, SessionLogger& logger, SharedAppState& state)
@@ -203,8 +232,8 @@ bool MetadataRtspSession::restart_after_startup_timeout() {
         std::lock_guard<std::mutex> lock(state_.meta_mutex);
         state_.current_objects.clear();
         state_.has_metadata_update = false;
+        state_.last_parse_status_text = "No metadata parsed yet";
     }
-    state_.last_parse_status_text = "No metadata parsed yet";
 
     GstStateChangeReturn play_ret = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
     logger_.log_event(std::string("MetadataSession: startup retry PLAYING request returned: ") + gst_element_state_change_return_get_name(play_ret));
@@ -388,6 +417,8 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
                 ++self->state_.total_event_only_payloads;
             }
 
+            record_parser_health(self->state_.parser_health_counts, parse_result.status, parse_result.message);
+
             for (const auto& object : parse_result.objects) {
                 ++self->state_.total_detection_events;
                 ++self->state_.detections_by_type[object.type];
@@ -410,10 +441,9 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
         }
 
         if (has_video_analytics) {
+            std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
             self->state_.last_parse_status_text = std::string("Parse: ") + parse_status_label(parse_result.status) +
                                                   " | objects=" + std::to_string(parse_result.objects.size());
-
-            std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
             if (!parse_result.objects.empty()) {
                 self->state_.current_objects = std::move(parse_result.objects);
                 self->state_.last_metadata_update = std::chrono::steady_clock::now();
@@ -424,7 +454,10 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
                 self->state_.has_metadata_update = true;
             }
         } else {
-            self->state_.last_parse_status_text = "Parse: event-only | overlay unchanged";
+            {
+                std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
+                self->state_.last_parse_status_text = "Parse: event-only | overlay unchanged";
+            }
             self->logger_.log_event("MetadataSession: event-only metadata ignored for overlay state");
         }
     };
@@ -451,14 +484,15 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
             ++self->state_.total_raw_metadata_samples;
             ++self->state_.total_parsed_payloads;
             ++self->state_.total_malformed_payloads;
+            ++self->state_.parser_health_counts.continuation_chunks;
             self->state_.last_raw_metadata_seen = std::chrono::steady_clock::now();
             self->state_.last_parsed_object_count = 0;
             self->state_.recent_parsed_summaries.push_back("status=malformed-payload message=\"XML start marker not found\" objects=0");
             if (self->state_.recent_parsed_summaries.size() > 8) {
                 self->state_.recent_parsed_summaries.erase(self->state_.recent_parsed_summaries.begin());
             }
+            self->state_.last_parse_status_text = "Parse: malformed-payload | objects=0";
         }
-        self->state_.last_parse_status_text = "Parse: malformed-payload | objects=0";
     }
 
     gst_buffer_unmap(buffer, &map);
@@ -485,6 +519,7 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     self->logger_.log_event(text.str());
     return select;
 }
+
 
 
 

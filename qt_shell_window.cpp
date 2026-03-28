@@ -5,9 +5,11 @@
 #include <regex>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHeaderView>
@@ -19,7 +21,6 @@
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPushButton>
-#include <QFontDatabase>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -40,6 +41,46 @@
 #include "video_rtsp_session.h"
 
 namespace {
+constexpr int kFreshMetadataWindowMs = 1500;
+constexpr int kVideoStartupRetryHintSeconds = 10;
+constexpr int kMetadataStartupHoldMs = 1500;
+
+struct SummaryFields {
+    std::string status = "unknown";
+    std::string message;
+    int objects = 0;
+    QStringList fragments;
+};
+
+struct RuntimeSnapshot {
+    cv::Mat frame;
+    std::vector<DetectedObject> overlay_objects;
+    bool has_video_frame = false;
+    bool metadata_is_fresh = false;
+    int total_raw_metadata_samples = 0;
+    int last_parsed_object_count = 0;
+    int total_detection_events = 0;
+    int total_parsed_payloads = 0;
+    std::chrono::steady_clock::time_point last_raw_metadata_seen{};
+    std::string last_parse_status_text = "No metadata parsed yet";
+    ParserHealthCounts parser_health_counts;
+    std::map<std::string, int> detections_by_type;
+    std::unordered_map<std::string, std::unordered_set<int>> unique_id_sets_by_type;
+    std::map<std::string, int> unique_ids_by_type;
+    std::vector<std::string> recent_summaries;
+};
+
+struct ReadinessViewModel {
+    QString runtime;
+    QString video;
+    QString metadata;
+    QString parser;
+    QString badge_text;
+    QString badge_background;
+    QString badge_foreground = "#ecf3f9";
+    QString connection_summary;
+};
+
 void configureTwoColumnTable(QTableWidget* table, const QString& left_header, const QString& right_header) {
     table->setColumnCount(2);
     table->setHorizontalHeaderLabels({left_header, right_header});
@@ -67,6 +108,15 @@ void configureThreeColumnTable(QTableWidget* table,
     table->setSelectionMode(QAbstractItemView::NoSelection);
     table->setFocusPolicy(Qt::NoFocus);
     table->setAlternatingRowColors(true);
+}
+
+void setCompactTableHeight(QTableWidget* table, int visible_rows) {
+    constexpr int kRowHeight = 24;
+    constexpr int kPadding = 10;
+    table->verticalHeader()->setDefaultSectionSize(kRowHeight);
+    const int height = table->horizontalHeader()->height() + (visible_rows * kRowHeight) + kPadding;
+    table->setMinimumHeight(height);
+    table->setMaximumHeight(height);
 }
 
 QTableWidgetItem* makeItem(const QString& text) {
@@ -120,6 +170,7 @@ std::map<std::string, int> toSortedUniqueCountMap(const std::unordered_map<std::
     }
     return result;
 }
+
 int familyDetectionCount(const std::map<std::string, int>& detections, const std::vector<std::string>& family_types) {
     int total = 0;
     for (const auto& type : family_types) {
@@ -130,6 +181,7 @@ int familyDetectionCount(const std::map<std::string, int>& detections, const std
     }
     return total;
 }
+
 int familyUniqueCount(const std::unordered_map<std::string, std::unordered_set<int>>& source,
                       const std::vector<std::string>& family_types) {
     std::unordered_set<int> ids;
@@ -186,37 +238,309 @@ std::string buildRtspUrl(const QString& ip, const QString& user, const QString& 
            "/profile" + profile.toStdString() + "/media.smp";
 }
 
-QString simplifySummaryLine(const std::string& line) {
+SummaryFields parseSummaryFields(const std::string& line) {
+    static const std::regex kStatusRe(R"(status=([^ ]+))");
+    static const std::regex kMessageRe("message=\\\"([^\\\"]+)\\\"");
+    static const std::regex kObjectsRe(R"(objects=(\d+))");
+    static const std::regex kObjectRe(R"(id=(\d+),type=([A-Za-z]+),score=(\d+)%)");
+
+    SummaryFields fields;
     std::smatch match;
-    std::regex status_re(R"(status=([^ ]+))");
-    std::regex objects_re(R"(objects=(\d+))");
-    std::regex object_re(R"(id=(\d+),type=([A-Za-z]+),score=(\d+)%)");
-
-    QString status = "unknown";
-    QString objects = "0";
-    if (std::regex_search(line, match, status_re) && match.size() > 1) {
-        status = QString::fromStdString(match[1].str());
+    if (std::regex_search(line, match, kStatusRe) && match.size() > 1) {
+        fields.status = match[1].str();
     }
-    if (std::regex_search(line, match, objects_re) && match.size() > 1) {
-        objects = QString::fromStdString(match[1].str());
+    if (std::regex_search(line, match, kMessageRe) && match.size() > 1) {
+        fields.message = match[1].str();
+    }
+    if (std::regex_search(line, match, kObjectsRe) && match.size() > 1) {
+        fields.objects = std::stoi(match[1].str());
     }
 
-    QStringList fragments;
-    auto begin = std::sregex_iterator(line.begin(), line.end(), object_re);
+    auto begin = std::sregex_iterator(line.begin(), line.end(), kObjectRe);
     auto end = std::sregex_iterator();
-    for (auto it = begin; it != end && fragments.size() < 3; ++it) {
+    for (auto it = begin; it != end && fields.fragments.size() < 3; ++it) {
         const auto& object_match = *it;
-        fragments << QString("%1 #%2 (%3%)")
-                         .arg(QString::fromStdString(object_match[2].str()))
-                         .arg(QString::fromStdString(object_match[1].str()))
-                         .arg(QString::fromStdString(object_match[3].str()));
+        fields.fragments << QString("%1 #%2 (%3%)")
+                                 .arg(QString::fromStdString(object_match[2].str()))
+                                 .arg(QString::fromStdString(object_match[1].str()))
+                                 .arg(QString::fromStdString(object_match[3].str()));
     }
 
-    QString summary = QString("%1 | objects=%2").arg(status, objects);
-    if (!fragments.isEmpty()) {
-        summary += " | " + fragments.join(", ");
+    return fields;
+}
+
+QString parserHealthCategoryLabel(const std::string& status, const std::string& message) {
+    if (message == "metadata-without-objects" || status == "no-objects") {
+        return "metadata without objects";
+    }
+    if (message == "continuation-without-xml-start" || message == "XML start marker not found") {
+        return "continuation chunk";
+    }
+    if (message == "truncated-object-fragment") {
+        return "fragmented object payload";
+    }
+    if (status == "unknown-pattern" || message.find("unknown-patterns") != std::string::npos) {
+        return "unknown object pattern";
+    }
+    if (message.rfind("recovered-continuation", 0) == 0) {
+        return "recovered continuation";
+    }
+    if (!message.empty()) {
+        return "clean object payload";
+    }
+    return "waiting for first payload";
+}
+
+QString formatSummaryLine(const std::string& line) {
+    const SummaryFields fields = parseSummaryFields(line);
+    QString summary = QString("%1 | %2 | objects=%3")
+                          .arg(QString::fromStdString(fields.status))
+                          .arg(fields.message.empty() ? QString("no-note") : QString::fromStdString(fields.message))
+                          .arg(fields.objects);
+    if (!fields.fragments.isEmpty()) {
+        summary += " | " + fields.fragments.join(", ");
     }
     return summary;
+}
+
+RuntimeSnapshot captureRuntimeSnapshot(SharedAppState& state) {
+    RuntimeSnapshot snapshot;
+    {
+        std::lock_guard<std::mutex> lock(state.frame_mutex);
+        if (!state.current_frame.empty()) {
+            snapshot.frame = state.current_frame.clone();
+            snapshot.has_video_frame = true;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state.meta_mutex);
+        const auto now = std::chrono::steady_clock::now();
+        snapshot.metadata_is_fresh =
+            state.has_metadata_update &&
+            (std::chrono::duration_cast<std::chrono::milliseconds>(now - state.last_metadata_update).count() <= kFreshMetadataWindowMs);
+        snapshot.total_raw_metadata_samples = state.total_raw_metadata_samples;
+        snapshot.last_parsed_object_count = state.last_parsed_object_count;
+        snapshot.total_detection_events = state.total_detection_events;
+        snapshot.total_parsed_payloads = state.total_parsed_payloads;
+        snapshot.last_raw_metadata_seen = state.last_raw_metadata_seen;
+        snapshot.last_parse_status_text = state.last_parse_status_text;
+        snapshot.parser_health_counts = state.parser_health_counts;
+        snapshot.detections_by_type = toSortedMap(state.detections_by_type);
+        snapshot.unique_id_sets_by_type = state.unique_ids_by_type;
+        snapshot.unique_ids_by_type = toSortedUniqueCountMap(state.unique_ids_by_type);
+        snapshot.recent_summaries = state.recent_parsed_summaries;
+
+        if (snapshot.metadata_is_fresh) {
+            snapshot.overlay_objects = state.current_objects;
+        }
+    }
+
+    return snapshot;
+}
+
+ReadinessViewModel buildReadinessViewModel(const RuntimeSnapshot& snapshot,
+                                           bool runtime_active,
+                                           bool metadata_enabled,
+                                           bool metadata_started,
+                                           std::chrono::steady_clock::time_point runtime_started_at,
+                                           std::chrono::steady_clock::time_point video_ready_since) {
+    ReadinessViewModel model;
+    if (!runtime_active) {
+        model.runtime = "idle";
+        model.video = "not started";
+        model.metadata = metadata_enabled ? "not started" : "disabled";
+        model.parser = "waiting for first payload";
+        model.badge_text = "Idle";
+        model.badge_background = "#3a4652";
+        model.connection_summary = "Not connected.";
+        return model;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const bool video_retry_window = runtime_started_at != std::chrono::steady_clock::time_point{} &&
+        (now - runtime_started_at >= std::chrono::seconds(kVideoStartupRetryHintSeconds));
+    const bool video_settled = video_ready_since != std::chrono::steady_clock::time_point{} &&
+        (now - video_ready_since >= std::chrono::milliseconds(kMetadataStartupHoldMs));
+    model.video = snapshot.has_video_frame ? "ready" : (video_retry_window ? "retrying" : "starting");
+
+    if (!metadata_enabled) {
+        model.metadata = "disabled";
+    } else if (!snapshot.has_video_frame && !metadata_started) {
+        model.metadata = "waiting for video baseline";
+    } else if (snapshot.has_video_frame && !metadata_started) {
+        model.metadata = video_settled ? "starting session" : "holding for video baseline";
+    } else if (snapshot.total_raw_metadata_samples > 0) {
+        model.metadata = snapshot.metadata_is_fresh ? "receiving" : "receiving / stale";
+    } else {
+        model.metadata = "waiting for first payload";
+    }
+
+    if (!snapshot.recent_summaries.empty()) {
+        const SummaryFields fields = parseSummaryFields(snapshot.recent_summaries.back());
+        model.parser = parserHealthCategoryLabel(fields.status, fields.message);
+    } else if (snapshot.total_raw_metadata_samples > 0) {
+        model.parser = "waiting for parsed summary";
+    } else {
+        model.parser = "waiting for first payload";
+    }
+
+    if (snapshot.has_video_frame && (!metadata_enabled || snapshot.total_raw_metadata_samples > 0)) {
+        model.runtime = "live";
+        model.badge_text = metadata_enabled ? "Live" : "Video ready";
+        model.badge_background = metadata_enabled ? "#166534" : "#0e7490";
+        model.connection_summary = metadata_enabled
+            ? QString::fromStdString("Video and metadata active. Last parser status: " + snapshot.last_parse_status_text)
+            : "Video is active. Metadata is disabled for this session.";
+    } else if (snapshot.has_video_frame) {
+        model.runtime = metadata_enabled ? "awaiting metadata" : "video ready";
+        model.badge_text = metadata_enabled ? "Awaiting metadata" : "Video ready";
+        model.badge_background = "#0e7490";
+        model.connection_summary = metadata_enabled
+            ? "Video is active. Waiting for the first metadata payload."
+            : "Video is active.";
+    } else if (snapshot.total_raw_metadata_samples > 0) {
+        model.runtime = "metadata only";
+        model.badge_text = "Metadata only";
+        model.badge_background = "#b45309";
+        model.connection_summary = QString::fromStdString(
+            "Metadata is active, but video has not started yet. Last parser status: " + snapshot.last_parse_status_text);
+    } else {
+        model.runtime = video_retry_window ? "retrying video" : "starting video";
+        model.badge_text = video_retry_window ? "Retrying" : "Starting video";
+        model.badge_background = "#8a6d1f";
+        model.connection_summary = "Video session started. Waiting for first frame before metadata startup.";
+    }
+
+    return model;
+}
+
+void initializeReadinessTable(QTableWidget* table) {
+    if (!table) {
+        return;
+    }
+    table->setRowCount(4);
+    setTableRow(table, 0, "runtime", "idle");
+    setTableRow(table, 1, "video", "not started");
+    setTableRow(table, 2, "metadata", "not started");
+    setTableRow(table, 3, "parser", "waiting for first payload");
+}
+
+void updateReadinessTable(QTableWidget* table, const ReadinessViewModel& model) {
+    if (!table) {
+        return;
+    }
+    setTableRow(table, 0, "runtime", model.runtime);
+    setTableRow(table, 1, "video", model.video);
+    setTableRow(table, 2, "metadata", model.metadata);
+    setTableRow(table, 3, "parser", model.parser);
+}
+
+void initializeEvidenceTable(QTableWidget* table) {
+    if (!table) {
+        return;
+    }
+    table->setRowCount(5);
+    setTableRow(table, 0, "raw", "not connected");
+    setTableRow(table, 1, "parsed", "0");
+    setTableRow(table, 2, "overlay", "0");
+    setTableRow(table, 3, "age", "n/a");
+    setTableRow(table, 4, "fresh", "no");
+}
+
+void updateEvidenceTable(QTableWidget* table, const RuntimeSnapshot& snapshot) {
+    if (!table) {
+        return;
+    }
+
+    const auto age_ms = snapshot.total_raw_metadata_samples > 0
+        ? std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - snapshot.last_raw_metadata_seen).count()
+        : -1LL;
+
+    setTableRow(table, 0, "raw", snapshot.total_raw_metadata_samples > 0 ? "seen" : "not-seen");
+    setTableRow(table, 1, "parsed", QString::number(snapshot.last_parsed_object_count));
+    setTableRow(table, 2, "overlay", QString::number(static_cast<int>(snapshot.overlay_objects.size())));
+    setTableRow(table, 3, "age", age_ms >= 0 ? QString::number(age_ms) + " ms" : "n/a");
+    setTableRow(table, 4, "fresh", snapshot.metadata_is_fresh ? "yes" : "no");
+}
+
+void initializeParserHealthTable(QTableWidget* table) {
+    if (!table) {
+        return;
+    }
+    table->setRowCount(6);
+    setTableRow(table, 0, "clean object payload", "0");
+    setTableRow(table, 1, "recovered continuation", "0");
+    setTableRow(table, 2, "fragmented object payload", "0");
+    setTableRow(table, 3, "continuation chunk", "0");
+    setTableRow(table, 4, "metadata without objects", "0");
+    setTableRow(table, 5, "unknown object pattern", "0");
+}
+
+void updateParserHealthTable(QTableWidget* table, const ParserHealthCounts& counts) {
+    if (!table) {
+        return;
+    }
+    setTableRow(table, 0, "clean object payload", QString::number(counts.clean_object_payloads));
+    setTableRow(table, 1, "recovered continuation", QString::number(counts.recovered_continuations));
+    setTableRow(table, 2, "fragmented object payload", QString::number(counts.fragmented_object_payloads));
+    setTableRow(table, 3, "continuation chunk", QString::number(counts.continuation_chunks));
+    setTableRow(table, 4, "metadata without objects", QString::number(counts.metadata_without_objects));
+    setTableRow(table, 5, "unknown object pattern", QString::number(counts.unknown_object_patterns));
+}
+
+void updateMetricsTable(QTableWidget* table, const RuntimeSnapshot& snapshot) {
+    if (!table) {
+        return;
+    }
+
+    std::map<std::string, int> combined_types = snapshot.detections_by_type;
+    for (const auto& entry : snapshot.unique_ids_by_type) {
+        if (!combined_types.count(entry.first)) {
+            combined_types[entry.first] = 0;
+        }
+    }
+
+    const std::vector<std::string> vehicle_family_types = {"Vehicle", "Car", "Bus", "Truck", "Motorcycle"};
+    const int vehicle_family_detections = familyDetectionCount(snapshot.detections_by_type, vehicle_family_types);
+    const int vehicle_family_unique = familyUniqueCount(snapshot.unique_id_sets_by_type, vehicle_family_types);
+
+    table->setRowCount(static_cast<int>(combined_types.size()) + 2);
+    int row = 0;
+    setTripleTableRow(table, row++, "Payloads / events",
+                      QString::number(snapshot.total_parsed_payloads),
+                      QString::number(snapshot.total_detection_events));
+    setTripleTableRow(table, row++, "Vehicle family",
+                      QString::number(vehicle_family_detections),
+                      QString::number(vehicle_family_unique));
+    for (const auto& entry : combined_types) {
+        const int unique_count = snapshot.unique_ids_by_type.count(entry.first) ? snapshot.unique_ids_by_type.at(entry.first) : 0;
+        QString label = QString::fromStdString(entry.first);
+        if (entry.first == "Vehicle") {
+            label += " (general)";
+        }
+        setTripleTableRow(table,
+                          row++,
+                          label,
+                          QString::number(entry.second),
+                          QString::number(unique_count));
+    }
+}
+
+void updateRecentMetadataList(QListWidget* list, const std::vector<std::string>& recent_summaries) {
+    if (!list) {
+        return;
+    }
+
+    list->clear();
+    if (recent_summaries.empty()) {
+        list->addItem("No parsed metadata yet.");
+        return;
+    }
+
+    for (const auto& line : recent_summaries) {
+        list->addItem(formatSummaryLine(line));
+    }
 }
 
 void drawOverlay(cv::Mat& frame, const std::vector<DetectedObject>& objects) {
@@ -260,6 +584,29 @@ void drawOverlay(cv::Mat& frame, const std::vector<DetectedObject>& objects) {
                     cv::Scalar(18, 28, 18),
                     thickness);
     }
+}
+
+void renderFrame(QLabel* target, const RuntimeSnapshot& snapshot) {
+    if (!target) {
+        return;
+    }
+
+    if (!snapshot.has_video_frame) {
+        target->setPixmap(QPixmap());
+        target->setText("Waiting for video...");
+        return;
+    }
+
+    cv::Mat frame_copy = snapshot.frame.clone();
+    if (!snapshot.overlay_objects.empty()) {
+        drawOverlay(frame_copy, snapshot.overlay_objects);
+    }
+
+    cv::cvtColor(frame_copy, frame_copy, cv::COLOR_BGR2RGB);
+    QImage image(frame_copy.data, frame_copy.cols, frame_copy.rows, static_cast<int>(frame_copy.step), QImage::Format_RGB888);
+    const QPixmap pixmap = QPixmap::fromImage(image.copy());
+    target->setPixmap(pixmap.scaled(target->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    target->setText(QString());
 }
 }
 
@@ -314,50 +661,113 @@ void QtShellWindow::closeEvent(QCloseEvent* event) {
 }
 
 QWidget* QtShellWindow::buildConnectionPanel() {
-    auto* box = new QGroupBox("Connection");
-    auto* layout = new QHBoxLayout(box);
+    auto* panel = new QWidget(this);
+    auto* layout = new QHBoxLayout(panel);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
 
-    auto* form_widget = new QWidget(box);
-    auto* form = new QFormLayout(form_widget);
-    form->setLabelAlignment(Qt::AlignRight);
+    auto* controls_box = new QGroupBox("Session Controls", panel);
+    controls_box->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    auto* controls_layout = new QVBoxLayout(controls_box);
+    controls_layout->setContentsMargins(10, 10, 10, 10);
+    controls_layout->setSpacing(8);
 
-    ip_edit_ = new QLineEdit(form_widget);
-    username_edit_ = new QLineEdit(form_widget);
-    password_edit_ = new QLineEdit(form_widget);
+    auto* top_row = new QHBoxLayout();
+    top_row->setSpacing(8);
+
+    auto addField = [&](const QString& label_text, QWidget* widget, int width) {
+        auto* column = new QVBoxLayout();
+        column->setSpacing(3);
+        auto* label = new QLabel(label_text, controls_box);
+        label->setStyleSheet("font-size: 11px; color: #8ea0b3; font-weight: 600;");
+        widget->setParent(controls_box);
+        widget->setMinimumWidth(width);
+        widget->setMaximumWidth(width);
+        column->addWidget(label);
+        column->addWidget(widget);
+        top_row->addLayout(column);
+    };
+
+    ip_edit_ = new QLineEdit(controls_box);
+    username_edit_ = new QLineEdit(controls_box);
+    password_edit_ = new QLineEdit(controls_box);
     password_edit_->setEchoMode(QLineEdit::Password);
-    profile_combo_ = new QComboBox(form_widget);
+    profile_combo_ = new QComboBox(controls_box);
     profile_combo_->addItems({"2", "4", "10"});
     profile_combo_->setCurrentText("2");
 
-    form->addRow("IP Address", ip_edit_);
-    form->addRow("Username", username_edit_);
-    form->addRow("Password", password_edit_);
-    form->addRow("Profile", profile_combo_);
+    addField("IP", ip_edit_, 170);
+    addField("User", username_edit_, 120);
+    addField("Password", password_edit_, 120);
+    addField("Profile", profile_combo_, 82);
 
-    auto* action_layout = new QVBoxLayout();
-    status_badge_ = new QLabel("Idle");
+    top_row->addSpacing(4);
+
+    status_badge_ = new QLabel("Idle", controls_box);
     status_badge_->setAlignment(Qt::AlignCenter);
-    status_badge_->setMinimumWidth(180);
-    connect_button_ = new QPushButton("Connect");
-    disconnect_button_ = new QPushButton("Disconnect");
+    status_badge_->setMinimumWidth(120);
+    status_badge_->setMaximumWidth(150);
+
+    connect_button_ = new QPushButton("Connect", controls_box);
+    connect_button_->setMinimumWidth(88);
+    connect_button_->setMaximumWidth(96);
+    disconnect_button_ = new QPushButton("Disconnect", controls_box);
     disconnect_button_->setEnabled(false);
-    connection_summary_ = new QLabel("Not connected.");
+    disconnect_button_->setMinimumWidth(96);
+    disconnect_button_->setMaximumWidth(104);
+
+    auto* status_column = new QVBoxLayout();
+    status_column->setSpacing(3);
+    auto* status_label = new QLabel("State", controls_box);
+    status_label->setStyleSheet("font-size: 11px; color: #8ea0b3; font-weight: 600;");
+    status_column->addWidget(status_label);
+    status_column->addWidget(status_badge_);
+    top_row->addLayout(status_column);
+
+    auto* button_column = new QVBoxLayout();
+    button_column->setSpacing(6);
+    button_column->addWidget(connect_button_);
+    button_column->addWidget(disconnect_button_);
+    top_row->addLayout(button_column);
+    top_row->addStretch(1);
+
+    connection_summary_ = new QLabel("Not connected.", controls_box);
     connection_summary_->setWordWrap(true);
+    connection_summary_->setMinimumHeight(48);
     connection_summary_->setStyleSheet("color: #c7d1da; background-color: #182029; border: 1px solid #2f3d4b; border-radius: 6px; padding: 8px;");
 
     connect(connect_button_, &QPushButton::clicked, this, [this]() { startRuntime(); });
     connect(disconnect_button_, &QPushButton::clicked, this, [this]() { stopRuntime(); });
 
-    action_layout->addWidget(status_badge_);
-    action_layout->addWidget(connect_button_);
-    action_layout->addWidget(disconnect_button_);
-    action_layout->addWidget(connection_summary_);
-    action_layout->addStretch(1);
+    controls_layout->addLayout(top_row);
+    controls_layout->addWidget(connection_summary_);
 
-    layout->addWidget(form_widget, 0);
-    layout->addLayout(action_layout, 1);
+    layout->addWidget(controls_box, 3);
+    layout->addWidget(buildOperatorStatePanel(panel), 2);
     setStatusBadge("Idle", "#3a4652", "#f0f4f8");
-    return box;
+    return panel;
+}
+
+QWidget* QtShellWindow::buildOperatorStatePanel(QWidget* parent) {
+    auto* operator_state_box = new QGroupBox("Operator State", parent);
+    operator_state_box->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    auto* operator_state_layout = new QHBoxLayout(operator_state_box);
+    operator_state_layout->setContentsMargins(10, 10, 10, 10);
+    operator_state_layout->setSpacing(8);
+
+    readiness_table_ = new QTableWidget(4, 2, operator_state_box);
+    configureTwoColumnTable(readiness_table_, "Stage", "State");
+    initializeReadinessTable(readiness_table_);
+    setCompactTableHeight(readiness_table_, 4);
+    operator_state_layout->addWidget(readiness_table_, 1);
+
+    parser_health_table_ = new QTableWidget(6, 2, operator_state_box);
+    configureTwoColumnTable(parser_health_table_, "Parser Health", "Count");
+    initializeParserHealthTable(parser_health_table_);
+    setCompactTableHeight(parser_health_table_, 6);
+    operator_state_layout->addWidget(parser_health_table_, 1);
+
+    return operator_state_box;
 }
 
 QWidget* QtShellWindow::buildVerificationPanel() {
@@ -381,39 +791,47 @@ QWidget* QtShellWindow::buildVerificationPanel() {
     right_layout->setContentsMargins(0, 0, 0, 0);
     right_layout->setSpacing(10);
 
+    auto* summary_row = new QHBoxLayout();
+    summary_row->setSpacing(10);
+
     auto* evidence_box = new QGroupBox("Evidence");
     auto* evidence_layout = new QVBoxLayout(evidence_box);
+    evidence_layout->setContentsMargins(10, 10, 10, 10);
     evidence_table_ = new QTableWidget(5, 2, evidence_box);
     configureTwoColumnTable(evidence_table_, "Field", "Value");
-    setTableRow(evidence_table_, 0, "raw", "not connected");
-    setTableRow(evidence_table_, 1, "parsed", "0");
-    setTableRow(evidence_table_, 2, "overlay", "0");
-    setTableRow(evidence_table_, 3, "age", "n/a");
-    setTableRow(evidence_table_, 4, "fresh", "no");
+    initializeEvidenceTable(evidence_table_);
+    setCompactTableHeight(evidence_table_, 5);
     evidence_layout->addWidget(evidence_table_);
+    summary_row->addWidget(evidence_box, 1);
 
     auto* metrics_box = new QGroupBox("Session Metrics");
     auto* metrics_layout = new QVBoxLayout(metrics_box);
+    metrics_layout->setContentsMargins(10, 10, 10, 10);
     metrics_table_ = new QTableWidget(0, 3, metrics_box);
     configureThreeColumnTable(metrics_table_, "Type", "Detections", "Unique IDs");
+    metrics_table_->setMinimumHeight(180);
     metrics_layout->addWidget(metrics_table_);
+    summary_row->addWidget(metrics_box, 2);
 
     auto* metadata_box = new QGroupBox("Recent Metadata");
     auto* metadata_layout = new QVBoxLayout(metadata_box);
+    metadata_layout->setContentsMargins(10, 10, 10, 10);
     recent_metadata_list_ = new QListWidget(metadata_box);
     recent_metadata_list_->addItem("No parsed metadata yet.");
     recent_metadata_list_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    recent_metadata_list_->setMinimumHeight(170);
+    recent_metadata_list_->setMaximumHeight(240);
     metadata_layout->addWidget(recent_metadata_list_);
 
-    right_layout->addWidget(evidence_box);
-    right_layout->addWidget(metrics_box);
-    right_layout->addWidget(metadata_box, 1);
+    right_layout->addLayout(summary_row);
+    right_layout->addWidget(metadata_box);
+    right_layout->addStretch(1);
 
     splitter->addWidget(video_box);
     splitter->addWidget(right_panel);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 2);
-    splitter->setSizes({920, 520});
+    splitter->setSizes({960, 500});
 
     return splitter;
 }
@@ -488,11 +906,16 @@ void QtShellWindow::startRuntime() {
     metadata_started_ = false;
     runtime_active_ = true;
     runtime_started_at_ = std::chrono::steady_clock::now();
+    video_ready_since_ = std::chrono::steady_clock::time_point{};
     connect_button_->setText("Reconnect");
     setRuntimeUiEnabled(false);
     disconnect_button_->setEnabled(true);
     setStatusBadge("Starting video", "#8a6d1f");
     connection_summary_->setText("Video session started. Waiting for first frame before metadata startup.");
+    initializeReadinessTable(readiness_table_);
+    initializeEvidenceTable(evidence_table_);
+    initializeParserHealthTable(parser_health_table_);
+    metrics_table_->setRowCount(0);
     recent_metadata_list_->clear();
     recent_metadata_list_->addItem("Waiting for parsed metadata...");
     poll_timer_->start(33);
@@ -512,6 +935,8 @@ void QtShellWindow::stopRuntime() {
 
     metadata_started_ = false;
     runtime_active_ = false;
+    runtime_started_at_ = std::chrono::steady_clock::time_point{};
+    video_ready_since_ = std::chrono::steady_clock::time_point{};
     metadata_session_.reset();
     video_session_.reset();
     shared_state_.reset();
@@ -534,13 +959,9 @@ void QtShellWindow::stopRuntime() {
         disconnect_button_->setEnabled(false);
     }
     setRuntimeUiEnabled(true);
-    if (evidence_table_) {
-        setTableRow(evidence_table_, 0, "raw", "not connected");
-        setTableRow(evidence_table_, 1, "parsed", "0");
-        setTableRow(evidence_table_, 2, "overlay", "0");
-        setTableRow(evidence_table_, 3, "age", "n/a");
-        setTableRow(evidence_table_, 4, "fresh", "no");
-    }
+    initializeReadinessTable(readiness_table_);
+    initializeEvidenceTable(evidence_table_);
+    initializeParserHealthTable(parser_health_table_);
     if (metrics_table_) {
         metrics_table_->setRowCount(0);
     }
@@ -569,7 +990,6 @@ void QtShellWindow::updateRuntime() {
             if (video_ready) {
                 if (video_ready_since_ == std::chrono::steady_clock::time_point{}) {
                     video_ready_since_ = now;
-                    connection_summary_->setText("Video is running. Holding metadata startup briefly to stabilize the video baseline.");
                 }
             } else {
                 video_ready_since_ = std::chrono::steady_clock::time_point{};
@@ -577,12 +997,10 @@ void QtShellWindow::updateRuntime() {
 
             const bool startup_wait_expired = now - runtime_started_at_ > std::chrono::seconds(15);
             const bool video_settled = video_ready_since_ != std::chrono::steady_clock::time_point{} &&
-                (now - video_ready_since_ >= std::chrono::milliseconds(1500));
+                (now - video_ready_since_ >= std::chrono::milliseconds(kMetadataStartupHoldMs));
 
             if ((video_settled || startup_wait_expired) && metadata_session_->start()) {
                 metadata_started_ = true;
-                setStatusBadge("Metadata starting", "#0e7490");
-                connection_summary_->setText("Video baseline is stable. Metadata session has started and is waiting for the first payload.");
             }
         }
 
@@ -593,128 +1011,28 @@ void QtShellWindow::updateRuntime() {
 
     refreshUiFromState();
 }
+
 void QtShellWindow::refreshUiFromState() {
     if (!shared_state_) {
         return;
     }
 
-    cv::Mat frame_copy;
-    {
-        std::lock_guard<std::mutex> lock(shared_state_->frame_mutex);
-        if (!shared_state_->current_frame.empty()) {
-            frame_copy = shared_state_->current_frame.clone();
-        }
-    }
+    const RuntimeSnapshot snapshot = captureRuntimeSnapshot(*shared_state_);
+    const ReadinessViewModel readiness = buildReadinessViewModel(snapshot,
+                                                                 runtime_active_,
+                                                                 config_.enable_metadata,
+                                                                 metadata_started_,
+                                                                 runtime_started_at_,
+                                                                 video_ready_since_);
 
-    std::vector<DetectedObject> overlay_objects;
-    bool metadata_is_fresh = false;
-    int total_raw_metadata_samples = 0;
-    int last_parsed_object_count = 0;
-    int total_detection_events = 0;
-    int total_parsed_payloads = 0;
-    std::chrono::steady_clock::time_point last_raw_metadata_seen{};
-    std::string status_text = "No metadata parsed yet";
-    std::map<std::string, int> detections_by_type;
-    std::unordered_map<std::string, std::unordered_set<int>> unique_id_sets_by_type;
-    std::map<std::string, int> unique_ids_by_type;
-    std::vector<std::string> recent_summaries;
-
-    {
-        std::lock_guard<std::mutex> lock(shared_state_->meta_mutex);
-        const auto now = std::chrono::steady_clock::now();
-        metadata_is_fresh =
-            shared_state_->has_metadata_update &&
-            (std::chrono::duration_cast<std::chrono::milliseconds>(now - shared_state_->last_metadata_update).count() <= 1500);
-        status_text = shared_state_->last_parse_status_text;
-        total_raw_metadata_samples = shared_state_->total_raw_metadata_samples;
-        last_parsed_object_count = shared_state_->last_parsed_object_count;
-        total_detection_events = shared_state_->total_detection_events;
-        total_parsed_payloads = shared_state_->total_parsed_payloads;
-        last_raw_metadata_seen = shared_state_->last_raw_metadata_seen;
-        detections_by_type = toSortedMap(shared_state_->detections_by_type);
-        unique_id_sets_by_type = shared_state_->unique_ids_by_type;
-        unique_ids_by_type = toSortedUniqueCountMap(shared_state_->unique_ids_by_type);
-        recent_summaries = shared_state_->recent_parsed_summaries;
-
-        if (metadata_is_fresh) {
-            overlay_objects = shared_state_->current_objects;
-        }
-    }
-
-    bool has_video_frame = !frame_copy.empty();
-    if (has_video_frame) {
-        if (!overlay_objects.empty()) {
-            drawOverlay(frame_copy, overlay_objects);
-        }
-        cv::cvtColor(frame_copy, frame_copy, cv::COLOR_BGR2RGB);
-        QImage image(frame_copy.data, frame_copy.cols, frame_copy.rows, static_cast<int>(frame_copy.step), QImage::Format_RGB888);
-        const QPixmap pixmap = QPixmap::fromImage(image.copy());
-        stream_placeholder_->setPixmap(pixmap.scaled(stream_placeholder_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        stream_placeholder_->setText(QString());
-    }
-
-    const auto age_ms = total_raw_metadata_samples > 0
-        ? std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - last_raw_metadata_seen).count()
-        : -1LL;
-
-    setTableRow(evidence_table_, 0, "raw", total_raw_metadata_samples > 0 ? "seen" : "not-seen");
-    setTableRow(evidence_table_, 1, "parsed", QString::number(last_parsed_object_count));
-    setTableRow(evidence_table_, 2, "overlay", QString::number(static_cast<int>(overlay_objects.size())));
-    setTableRow(evidence_table_, 3, "age", age_ms >= 0 ? QString::number(age_ms) + " ms" : "n/a");
-    setTableRow(evidence_table_, 4, "fresh", metadata_is_fresh ? "yes" : "no");
-
-    std::map<std::string, int> combined_types = detections_by_type;
-    for (const auto& entry : unique_ids_by_type) {
-        if (!combined_types.count(entry.first)) {
-            combined_types[entry.first] = 0;
-        }
-    }
-    const std::vector<std::string> vehicle_family_types = {"Vehicle", "Car", "Bus", "Truck", "Motorcycle"};
-    const int vehicle_family_detections = familyDetectionCount(detections_by_type, vehicle_family_types);
-    const int vehicle_family_unique = familyUniqueCount(unique_id_sets_by_type, vehicle_family_types);
-    metrics_table_->setRowCount(static_cast<int>(combined_types.size()) + 2);
-    int row = 0;
-    setTripleTableRow(metrics_table_, row++, "Payloads / events",
-                      QString::number(total_parsed_payloads),
-                      QString::number(total_detection_events));
-    setTripleTableRow(metrics_table_, row++, "Vehicle family",
-                      QString::number(vehicle_family_detections),
-                      QString::number(vehicle_family_unique));
-    for (const auto& entry : combined_types) {
-        const int unique_count = unique_ids_by_type.count(entry.first) ? unique_ids_by_type[entry.first] : 0;
-        QString label = QString::fromStdString(entry.first);
-        if (entry.first == "Vehicle") {
-            label += " (general)";
-        }
-        setTripleTableRow(metrics_table_,
-                          row++,
-                          label,
-                          QString::number(entry.second),
-                          QString::number(unique_count));
-    }
-
-    recent_metadata_list_->clear();
-    if (recent_summaries.empty()) {
-        recent_metadata_list_->addItem("No parsed metadata yet.");
-    } else {
-        for (const auto& line : recent_summaries) {
-            recent_metadata_list_->addItem(simplifySummaryLine(line));
-        }
-    }
-
-    if (has_video_frame && total_raw_metadata_samples > 0) {
-        setStatusBadge("Live", "#166534");
-        connection_summary_->setText(QString::fromStdString("Video and metadata active. Last parser status: " + status_text));
-    } else if (has_video_frame) {
-        setStatusBadge("Video only", "#0e7490");
-        connection_summary_->setText("Video is active. Waiting for the first metadata payload.");
-    } else if (total_raw_metadata_samples > 0) {
-        setStatusBadge("Metadata only", "#b45309");
-        connection_summary_->setText(QString::fromStdString("Metadata is active, but video has not started yet. Last parser status: " + status_text));
-    } else {
-        setStatusBadge("Retrying", "#8a6d1f");
-        connection_summary_->setText("Video session is retrying. Metadata is not active yet.");
-    }
+    renderFrame(stream_placeholder_, snapshot);
+    updateReadinessTable(readiness_table_, readiness);
+    updateEvidenceTable(evidence_table_, snapshot);
+    updateParserHealthTable(parser_health_table_, snapshot.parser_health_counts);
+    updateMetricsTable(metrics_table_, snapshot);
+    updateRecentMetadataList(recent_metadata_list_, snapshot.recent_summaries);
+    setStatusBadge(readiness.badge_text, readiness.badge_background, readiness.badge_foreground);
+    connection_summary_->setText(readiness.connection_summary);
 }
 
 void QtShellWindow::setRuntimeUiEnabled(bool enabled) {
@@ -741,10 +1059,6 @@ void QtShellWindow::setStatusBadge(const QString& text, const QString& backgroun
         QString("background-color: %1; color: %2; border-radius: 12px; padding: 6px 12px; font-weight: 700;")
             .arg(background, foreground));
 }
-
-
-
-
 
 
 

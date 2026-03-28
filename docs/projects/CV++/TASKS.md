@@ -1,10 +1,10 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v1.3`
-- Status: `Milestone 3 active; ONVIF pipeline validated on profile4/profile2 smoke; daytime operator validation pending`
+- Version: `v1.5`
+- Status: `Milestone 3 active; ONVIF pipeline baseline validated; startup repeatability treated as known non-blocking issue`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-26`
+- Last Updated: `2026-03-27`
 - Owner: `Software Engineer Agent`
 
 ## Change History
@@ -23,9 +23,11 @@
 | 2026-03-25 | v1.1 | Added a deferred future milestone for thermal camera metadata validation. |
 | 2026-03-25 | v1.2 | Documented the interim ONVIF metadata pipeline finding and added the remaining app-level verification step. |
 | 2026-03-26 | v1.3 | Validated the ONVIF-aware metadata path on profile4 and profile2 smoke runs and added startup-stability follow-up work. |
+| 2026-03-27 | v1.4 | Added the repeated smoke verification procedure and demoted startup repeatability to a known non-blocking issue. |
+| 2026-03-27 | v1.5 | Surfaced parser-health and readiness state in the Qt shell while keeping the smoke-verification baseline unchanged. |
 
 ## Summary
-The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The active milestone remains metadata evidence and performance visibility, but the metadata transport baseline is now much clearer.
+The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The active milestone remains metadata evidence and performance visibility, and the ONVIF-aware metadata transport path is now the validated baseline.
 
 ## Milestone 1: Minimal Runtime Skeleton
 Status: completed.
@@ -86,18 +88,22 @@ Completed in the current analysis and transport slice:
 - validated the ONVIF-aware metadata path in fresh full-app `profile4` and `profile2` smoke runs
 - moved `MetadataRtspSession` to metadata-only selection so profile behavior is treated as a startup-stability question, not a metadata-semantics question
 - introduced first-frame delay and link-aware metadata watchdog logic to reduce delayed overlay startup risk
+- added `tools/run_profile_smoke.ps1` so startup repeatability can be checked repeatedly instead of by one-off threshold tweaking
 
 Current verified outcome:
 - `profile4` full-app smoke can reach `application/x-onvif-metadata` and clean parse results with `malformed-payload=0`
 - `profile2` smoke can also reach `application/x-onvif-metadata` and clean parse results with `malformed-payload=0`
 - parser-noise labels did not appear in the validated clean ONVIF-path smoke sessions
+- startup repeatability still varies, especially on the video side, but this is now treated as a known non-blocking issue rather than the main blocker
+- the Qt shell now shows operator-facing readiness state for runtime, video, metadata, and parser progression
+- the Qt shell now shows grouped parser-health counts for clean payloads, recovered continuations, fragmented payloads, continuation chunks, metadata-without-objects, and unknown-pattern payloads
+- recent metadata lines now keep both parser `status` and raw parser `message` visible for operator spot checks
 
 Next step inside Milestone 3:
-- surface parser-health counts in the Qt shell using the current taxonomy
-- reduce video-session startup retries further so startup latency is more repeatable
-- package the current nighttime nonvisual smoke verification into a repeatable procedure
+- package the current nighttime nonvisual smoke verification into a repeatable documented procedure
 - keep session summaries aligned with the baseline docs so later SQLite ingestion can stay mechanical
-- do a daytime object-rich validation pass for overlay responsiveness and operator confidence
+- run the daytime object-rich validation checklist in `VERIFICATION_GUIDE.md` and capture whether Operator State wording is clear enough without log-first debugging
+- revisit startup repeatability only if it becomes a practical blocker again
 
 Done when:
 - the app exposes evidence state without requiring manual log inspection
@@ -151,6 +157,7 @@ Completed work:
 Next step inside the Qt transition:
 - improve connection UX and state messaging
 - tighten panel density and visual hierarchy
+- validate the new Qt operator-state panel in daytime object-rich sessions and tune wording only if operators still hesitate
 - keep the OpenCV view only as fallback while validating the Qt shell as the main operator surface
 
 ## Milestone 8: SQLite Session Review Foundation
@@ -209,4 +216,8 @@ Start condition:
 - `docs/projects/CV++/MESSAGE_INVESTIGATION.md`
 - `docs/projects/CV++/ONVIF_METADATA_PIPELINE_INVESTIGATION.md`
 - `docs/projects/CV++/METADATA_REFERENCE.md`
+- `docs/projects/CV++/VERIFICATION_GUIDE.md`
 - `docs/projects/CV++/CPP_LEARNING_GUIDE.md`
+
+
+
