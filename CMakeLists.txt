@@ -15,6 +15,7 @@ add_executable(${PROJECT_NAME}
     app_config.cpp
     session_logger.cpp
     metadata_parser.cpp
+    overlay_state.cpp
     video_rtsp_session.cpp
     metadata_rtsp_session.cpp
 )
@@ -57,6 +58,7 @@ if (Qt6_FOUND)
         app_config.cpp
         session_logger.cpp
         metadata_parser.cpp
+        overlay_state.cpp
         video_rtsp_session.cpp
         metadata_rtsp_session.cpp
     )

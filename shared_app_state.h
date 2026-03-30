@@ -10,6 +10,7 @@
 #include <opencv2/opencv.hpp>
 
 #include "metadata_types.h"
+#include "overlay_state.h"
 
 struct ParserHealthCounts {
     int clean_object_payloads = 0;
@@ -39,6 +40,6 @@ struct SharedAppState {
     std::unordered_map<std::string, int> detections_by_type;
     std::unordered_map<std::string, std::unordered_set<int>> unique_ids_by_type;
     ParserHealthCounts parser_health_counts;
+    OverlayRuntimeState overlay_state;
     std::vector<std::string> recent_parsed_summaries;
 };
-

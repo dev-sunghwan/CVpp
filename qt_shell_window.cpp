@@ -63,6 +63,8 @@ struct RuntimeSnapshot {
     int total_parsed_payloads = 0;
     std::chrono::steady_clock::time_point last_raw_metadata_seen{};
     std::string last_parse_status_text = "No metadata parsed yet";
+    std::string overlay_reason = "No metadata";
+    std::chrono::steady_clock::time_point overlay_reason_since{};
     ParserHealthCounts parser_health_counts;
     std::map<std::string, int> detections_by_type;
     std::unordered_map<std::string, std::unordered_set<int>> unique_id_sets_by_type;
@@ -325,6 +327,8 @@ RuntimeSnapshot captureRuntimeSnapshot(SharedAppState& state) {
         snapshot.total_parsed_payloads = state.total_parsed_payloads;
         snapshot.last_raw_metadata_seen = state.last_raw_metadata_seen;
         snapshot.last_parse_status_text = state.last_parse_status_text;
+        snapshot.overlay_reason = state.overlay_state.reason;
+        snapshot.overlay_reason_since = state.overlay_state.reason_since;
         snapshot.parser_health_counts = state.parser_health_counts;
         snapshot.detections_by_type = toSortedMap(state.detections_by_type);
         snapshot.unique_id_sets_by_type = state.unique_ids_by_type;
@@ -339,6 +343,18 @@ RuntimeSnapshot captureRuntimeSnapshot(SharedAppState& state) {
     return snapshot;
 }
 
+QString buildOverlayStateLabel(const RuntimeSnapshot& snapshot,
+                               bool metadata_enabled,
+                               bool metadata_started) {
+    return QString::fromStdString(
+        derive_overlay_reason_for_ui(snapshot.has_video_frame,
+                                     metadata_enabled,
+                                     metadata_started,
+                                     snapshot.total_raw_metadata_samples > 0,
+                                     snapshot.metadata_is_fresh,
+                                     static_cast<int>(snapshot.overlay_objects.size()),
+                                     snapshot.overlay_reason));
+}
 ReadinessViewModel buildReadinessViewModel(const RuntimeSnapshot& snapshot,
                                            bool runtime_active,
                                            bool metadata_enabled,
@@ -440,15 +456,16 @@ void initializeEvidenceTable(QTableWidget* table) {
     if (!table) {
         return;
     }
-    table->setRowCount(5);
+    table->setRowCount(6);
     setTableRow(table, 0, "raw", "not connected");
     setTableRow(table, 1, "parsed", "0");
     setTableRow(table, 2, "overlay", "0");
-    setTableRow(table, 3, "age", "n/a");
-    setTableRow(table, 4, "fresh", "no");
+    setTableRow(table, 3, "overlay state", "Not connected");
+    setTableRow(table, 4, "age", "n/a");
+    setTableRow(table, 5, "fresh", "no");
 }
 
-void updateEvidenceTable(QTableWidget* table, const RuntimeSnapshot& snapshot) {
+void updateEvidenceTable(QTableWidget* table, const RuntimeSnapshot& snapshot, const QString& overlay_state_label) {
     if (!table) {
         return;
     }
@@ -460,8 +477,9 @@ void updateEvidenceTable(QTableWidget* table, const RuntimeSnapshot& snapshot) {
     setTableRow(table, 0, "raw", snapshot.total_raw_metadata_samples > 0 ? "seen" : "not-seen");
     setTableRow(table, 1, "parsed", QString::number(snapshot.last_parsed_object_count));
     setTableRow(table, 2, "overlay", QString::number(static_cast<int>(snapshot.overlay_objects.size())));
-    setTableRow(table, 3, "age", age_ms >= 0 ? QString::number(age_ms) + " ms" : "n/a");
-    setTableRow(table, 4, "fresh", snapshot.metadata_is_fresh ? "yes" : "no");
+    setTableRow(table, 3, "overlay state", overlay_state_label);
+    setTableRow(table, 4, "age", age_ms >= 0 ? QString::number(age_ms) + " ms" : "n/a");
+    setTableRow(table, 5, "fresh", snapshot.metadata_is_fresh ? "yes" : "no");
 }
 
 void initializeParserHealthTable(QTableWidget* table) {
@@ -797,10 +815,10 @@ QWidget* QtShellWindow::buildVerificationPanel() {
     auto* evidence_box = new QGroupBox("Evidence");
     auto* evidence_layout = new QVBoxLayout(evidence_box);
     evidence_layout->setContentsMargins(10, 10, 10, 10);
-    evidence_table_ = new QTableWidget(5, 2, evidence_box);
+    evidence_table_ = new QTableWidget(6, 2, evidence_box);
     configureTwoColumnTable(evidence_table_, "Field", "Value");
     initializeEvidenceTable(evidence_table_);
-    setCompactTableHeight(evidence_table_, 5);
+    setCompactTableHeight(evidence_table_, 6);
     evidence_layout->addWidget(evidence_table_);
     summary_row->addWidget(evidence_box, 1);
 
@@ -1024,10 +1042,11 @@ void QtShellWindow::refreshUiFromState() {
                                                                  metadata_started_,
                                                                  runtime_started_at_,
                                                                  video_ready_since_);
+    const QString overlay_state_label = buildOverlayStateLabel(snapshot, config_.enable_metadata, metadata_started_);
 
     renderFrame(stream_placeholder_, snapshot);
     updateReadinessTable(readiness_table_, readiness);
-    updateEvidenceTable(evidence_table_, snapshot);
+    updateEvidenceTable(evidence_table_, snapshot, overlay_state_label);
     updateParserHealthTable(parser_health_table_, snapshot.parser_health_counts);
     updateMetricsTable(metrics_table_, snapshot);
     updateRecentMetadataList(recent_metadata_list_, snapshot.recent_summaries);
@@ -1059,6 +1078,11 @@ void QtShellWindow::setStatusBadge(const QString& text, const QString& backgroun
         QString("background-color: %1; color: %2; border-radius: 12px; padding: 6px 12px; font-weight: 700;")
             .arg(background, foreground));
 }
+
+
+
+
+
 
 
 

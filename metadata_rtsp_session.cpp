@@ -7,6 +7,7 @@
 #include <gst/rtsp/rtsp.h>
 
 #include "metadata_parser.h"
+#include "overlay_state.h"
 
 namespace {
 const char* rtsp_method_label(GstRTSPMethod method) {
@@ -519,6 +520,8 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     self->logger_.log_event(text.str());
     return select;
 }
+
+
 
 
 
