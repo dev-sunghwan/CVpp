@@ -1,11 +1,28 @@
 ﻿# CV++ SQLite Storage Requirements
 
 ## Document Control
-- Version: `v0.1`
-- Status: `Drafted`
+- Version: `v0.2`
+- Status: `First write-path slice implemented and runtime-validated`
 - Created: `2026-03-25`
-- Last Updated: `2026-03-25`
+- Last Updated: `2026-04-01`
 - Owner: `Software Engineer Agent`
+
+## Implementation Status
+Implemented in the first Milestone 8 foundation slice:
+- local database path: `output/cvpp_review.db`
+- `sessions` rows are created at session start
+- `session_artifacts` rows are created at session start
+- `parsed_payloads` and `parsed_objects` rows are appended during metadata handling
+- `sessions` summary fields and `session_type_metrics` are updated on graceful session shutdown
+- plain logs remain on disk even when SQLite writes succeed
+
+Runtime-validated outcome from the first completed graceful session check:
+- one completed session row was found with non-null `ended_at`
+- summary fields such as `raw_samples`, `parsed_payloads`, `event_only_payloads`, and `detection_events` were populated
+- `session_type_metrics` rows were written for the normalized types present in the session
+
+Known current limitation:
+- the first slice writes and validates review data, but it does not yet provide a dedicated in-app read or browsing surface
 
 ## Purpose
 This document defines the minimum SQLite requirements for Milestone 8 so CV++ can move from log-only session review to practical local review without replacing the current plain-file evidence flow.
@@ -200,3 +217,6 @@ Milestone 8 storage foundation is done when:
 
 ## Recommendation
 Implement SQLite as a local review index over the existing session folders, not as a replacement for the logging system. The first schema should stay deliberately small and reflect the runtime data the app already knows how to produce today.
+
+
+

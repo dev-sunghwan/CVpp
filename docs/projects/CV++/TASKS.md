@@ -1,10 +1,10 @@
 ﻿# CV++ Tasks
 
 ## Document Control
-- Version: `v1.5`
-- Status: `Milestone 3 active; ONVIF pipeline baseline validated; startup repeatability treated as known non-blocking issue`
+- Version: `v1.6`
+- Status: `Milestone 8 first SQLite foundation slice implemented; ONVIF pipeline baseline validated; startup repeatability treated as known non-blocking issue`
 - Created: `2026-03-18`
-- Last Updated: `2026-03-27`
+- Last Updated: `2026-04-01`
 - Owner: `Software Engineer Agent`
 
 ## Change History
@@ -25,6 +25,7 @@
 | 2026-03-26 | v1.3 | Validated the ONVIF-aware metadata path on profile4 and profile2 smoke runs and added startup-stability follow-up work. |
 | 2026-03-27 | v1.4 | Added the repeated smoke verification procedure and demoted startup repeatability to a known non-blocking issue. |
 | 2026-03-27 | v1.5 | Surfaced parser-health and readiness state in the Qt shell while keeping the smoke-verification baseline unchanged. |
+| 2026-04-01 | v1.6 | Added the first SQLite session-review foundation slice and runtime-validated the core write path plus graceful session finalization. |
 
 ## Summary
 The project has moved beyond initial RTSP bring-up. The current baseline can receive video, capture metadata, parse multi-object frames, and render multi-object overlays. The active milestone remains metadata evidence and performance visibility, and the ONVIF-aware metadata transport path is now the validated baseline.
@@ -173,10 +174,30 @@ Completed in planning:
 - drafted `docs/projects/CV++/SQLITE_STORAGE_REQUIREMENTS.md`
 - narrowed the first schema to `sessions`, `session_artifacts`, `parsed_payloads`, `parsed_objects`, and `session_type_metrics`
 
+Completed in the first foundation slice:
+- added a local SQLite review database at `output/cvpp_review.db`
+- created the first-pass tables: `sessions`, `session_artifacts`, `parsed_payloads`, `parsed_objects`, and `session_type_metrics`
+- wrote one session row and artifact links at session start without storing credentials
+- appended parsed payload rows and parsed object rows during live metadata handling
+- updated session summary fields and `session_type_metrics` on graceful session shutdown
+- verified the core write path in a live run, including `ended_at`, summary counts, and per-type metrics persistence
+- kept plain logs as the raw evidence baseline even when SQLite writes succeeded
+
+Current verified outcome:
+- completed sessions can now be found in SQLite by `session_id`
+- SQLite links each session back to `session.log`, `metadata_raw.xml.log`, and `parsed_summary.log`
+- SQLite can already answer payload counts, parsed-object rows, and per-type detection versus unique-object metrics for a validated session
+- if SQLite write setup fails, the runtime still keeps plain log output as the fallback evidence path
+
+Next step inside Milestone 8:
+- add a minimal read path so local review can inspect recent sessions without opening the database manually
+- decide whether the first read surface should be a small Qt review panel or a simpler export/query helper
+- keep the first review slice summary-oriented rather than building a large browsing UI too early
+
 Recommended order:
-1. finish the Qt verification shell polish
-2. deepen metadata performance metrics in the UI and session summary
-3. start the SQLite foundation
+1. keep the current SQLite write path stable
+2. add the smallest useful read path over the stored session data
+3. expand review queries only after the first read path is usable
 
 ## Milestone 9: Thermal Camera Metadata Validation
 Status: deferred future track.
@@ -218,6 +239,8 @@ Start condition:
 - `docs/projects/CV++/METADATA_REFERENCE.md`
 - `docs/projects/CV++/VERIFICATION_GUIDE.md`
 - `docs/projects/CV++/CPP_LEARNING_GUIDE.md`
+
+
 
 
 
