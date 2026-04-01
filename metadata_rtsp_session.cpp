@@ -401,6 +401,10 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
                               " message=\"" + parse_result.message + "\" " +
                               summarize_objects(parse_result.objects);
         self->logger_.log_parsed_summary(summary);
+        self->logger_.record_parsed_payload(parse_status_label(parse_result.status),
+                                            parse_result.message,
+                                            parse_result.objects,
+                                            has_video_analytics);
         self->logger_.log_event(std::string("MetadataSession: parse result: ") + summary);
         {
             std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
@@ -480,6 +484,7 @@ GstFlowReturn MetadataRtspSession::on_new_meta_sample(GstElement* sink, gpointer
     } else {
         self->logger_.log_event("MetadataSession: metadata payload received without XML start marker");
         self->logger_.log_parsed_summary("status=malformed-payload message=\"XML start marker not found\" objects=0");
+        self->logger_.record_parsed_payload("malformed-payload", "XML start marker not found", {}, false);
         {
             std::lock_guard<std::mutex> lock(self->state_.meta_mutex);
             ++self->state_.total_raw_metadata_samples;
@@ -520,6 +525,10 @@ gboolean MetadataRtspSession::on_select_stream(GstElement*, guint stream_index, 
     self->logger_.log_event(text.str());
     return select;
 }
+
+
+
+
 
 
 

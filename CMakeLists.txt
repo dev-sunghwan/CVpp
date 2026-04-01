@@ -14,6 +14,7 @@ add_executable(${PROJECT_NAME}
     main.cpp
     app_config.cpp
     session_logger.cpp
+    sqlite_session_store.cpp
     metadata_parser.cpp
     overlay_state.cpp
     video_rtsp_session.cpp
@@ -28,12 +29,13 @@ add_executable(metadata_probe
 
 set(GST_PREFIX "C:/Program Files/gstreamer/1.0/msvc_x86_64")
 set(GST_INCLUDE_DIRS
+    "${GST_PREFIX}/include"
     "${GST_PREFIX}/include/gstreamer-1.0"
     "${GST_PREFIX}/include/glib-2.0"
     "${GST_PREFIX}/lib/glib-2.0/include"
 )
 set(GST_LIBRARY_DIRS "${GST_PREFIX}/lib")
-set(GST_LIBS gstreamer-1.0 gobject-2.0 glib-2.0 gstapp-1.0 gstrtsp-1.0)
+set(GST_LIBS gstreamer-1.0 gobject-2.0 glib-2.0 gstapp-1.0 gstrtsp-1.0 sqlite3)
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${OpenCV_INCLUDE_DIRS} ${GST_INCLUDE_DIRS})
 target_link_directories(${PROJECT_NAME} PRIVATE ${GST_LIBRARY_DIRS})
@@ -57,6 +59,7 @@ if (Qt6_FOUND)
         qt_shell_window.h
         app_config.cpp
         session_logger.cpp
+        sqlite_session_store.cpp
         metadata_parser.cpp
         overlay_state.cpp
         video_rtsp_session.cpp

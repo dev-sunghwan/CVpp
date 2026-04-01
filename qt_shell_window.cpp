@@ -905,7 +905,7 @@ void QtShellWindow::startRuntime() {
                                     profile_combo_->currentText());
 
     logger_ = std::make_unique<SessionLogger>();
-    if (!logger_->initialize(config_.output_root, error_message)) {
+    if (!logger_->initialize(config_, error_message)) {
         QMessageBox::critical(this, "CV++", QString::fromStdString("Failed to initialize logging: " + error_message));
         logger_.reset();
         return;
@@ -949,6 +949,10 @@ void QtShellWindow::stopRuntime() {
     }
     if (video_session_) {
         video_session_->stop();
+    }
+
+    if (logger_ && shared_state_) {
+        logger_->finalize_session(*shared_state_);
     }
 
     metadata_started_ = false;
@@ -1078,6 +1082,7 @@ void QtShellWindow::setStatusBadge(const QString& text, const QString& backgroun
         QString("background-color: %1; color: %2; border-radius: 12px; padding: 6px 12px; font-weight: 700;")
             .arg(background, foreground));
 }
+
 
 
 

@@ -475,7 +475,7 @@ int main(int argc, char* argv[]) {
     }
 
     SessionLogger logger;
-    if (!logger.initialize(config.output_root, error_message)) {
+    if (!logger.initialize(config, error_message)) {
         std::cerr << "[ERROR] Failed to initialize logging: " << error_message << std::endl;
         return 1;
     }
@@ -669,11 +669,12 @@ int main(int argc, char* argv[]) {
     }
     video_session.stop();
     cv::destroyAllWindows();
-    log_session_metrics(logger, shared_state);
+    logger.finalize_session(shared_state);
     logger.log_event("Session stopped");
     std::cout << "[INFO] Done." << std::endl;
     return 0;
 }
+
 
 
 
